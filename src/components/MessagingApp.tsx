@@ -635,10 +635,26 @@ export function MessagingApp({
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', runSync)
+
+    // BroadcastChannel for 0ms cross-tab instant local sync
+    let bc: BroadcastChannel | null = null
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        bc = new BroadcastChannel('chatze_live_tab_sync')
+        bc.onmessage = (event) => {
+          if (event.data?.type === 'new_message') {
+            runSync()
+          }
+        }
+      }
+    } catch {}
 
     return () => {
       if (hiddenTimeout) clearTimeout(hiddenTimeout)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', runSync)
+      if (bc) bc.close()
       if (evtSource) evtSource.close()
     }
   }, [currentUser.id])

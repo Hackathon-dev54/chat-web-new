@@ -5,6 +5,7 @@ import { streamSSE } from 'hono/streaming'
 type Bindings = {
   DB?: any // Cloudflare D1 Database binding
   ASSETS?: any // Cloudflare Workers static assets binding
+  REALTIME_ROOM?: any // Cloudflare Durable Object binding for 0ms cross-isolate push
   JWT_SECRET?: string
   NODE_ENV?: string
 }
@@ -44,8 +45,24 @@ export function emitUserEvent(userId: string, eventName: string, payload: any) {
   }
 }
 
-export function broadcastAllStreams(eventName: string, payload: any) {
-  const packet = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`
+export function broadcastAllStreams(eventName: string, payload: any, env?: any) {
+  // 1. If Cloudflare Durable Object is available, broadcast across ALL global isolates & devices in 0ms!
+  if (env?.REALTIME_ROOM) {
+    try {
+      const id = env.REALTIME_ROOM.idFromName('global_room')
+      const stub = env.REALTIME_ROOM.get(id)
+      stub.fetch('http://internal/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: eventName, data: payload }),
+      }).catch((e: any) => console.warn('[DO Broadcast Warning]', e?.message))
+    } catch (err: any) {
+      console.warn('[DO Broadcast Error]', err?.message)
+    }
+  }
+
+  // 2. In-memory local isolate broadcast
+  const packet = `event: ${eventName}\ndata: ${typeof payload === 'string' ? payload : JSON.stringify(payload)}\n\n`
   for (const [, clients] of activeStreams) {
     for (const client of clients) {
       try {
@@ -788,7 +805,7 @@ app.post('/api/federation/v1/requests', async (c) => {
       from_handle: cleanFromHandle,
       from_display_name: from_display_name || `@${cleanFromHandle}`,
       from_instance_url: remoteUrl,
-    })
+    }, c.env)
 
     return c.json({ success: true, status: 'received' }, 201)
   } catch (err: any) {
@@ -836,17 +853,15 @@ app.post('/api/federation/requests/accept', async (c) => {
       remoteHandle: cleanHandle,
       conversationId,
       status: 'active',
-    })
+    }, c.env)
 
     if (remoteInstanceUrl) {
       try {
-        const reqOrigin = new URL(c.req.url).origin
         await fetch(`${normalizeUrl(remoteInstanceUrl)}/api/federation/v1/requests/accept`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             from_handle: actualMyHandle,
-            from_instance_url: reqOrigin,
             accepted: true,
             timestamp: now,
           }),
@@ -865,56 +880,26 @@ app.post('/api/federation/requests/accept', async (c) => {
 // Peer approved our request
 app.post('/api/federation/v1/requests/accept', async (c) => {
   try {
-    const { from_handle, from_instance_url } = await c.req.json()
+    const { from_handle } = await c.req.json()
     const cleanHandle = (from_handle || '').replace(/^@/, '').trim().toLowerCase()
-    const remoteUrl = normalizeUrl(from_instance_url || c.req.header('Origin') || '')
     const conversationId = 'conv_' + cleanHandle
-    const now = Date.now()
-
-    let matchedHandle = cleanHandle
-    let targetConvId = conversationId
 
     for (const [, f] of memoryStore.friendships) {
-      if (f.remote_handle === cleanHandle || (remoteUrl && f.remote_instance_url && normalizeUrl(f.remote_instance_url) === remoteUrl)) {
-        f.status = 'active'
-        f.remote_handle = cleanHandle
-        matchedHandle = f.remote_handle
-      }
+      if (f.remote_handle === cleanHandle) f.status = 'active'
     }
-    const conv = memoryStore.conversations.get(conversationId) || Array.from(memoryStore.conversations.values()).find(cv => remoteUrl && cv.remote_instance_url && normalizeUrl(cv.remote_instance_url) === remoteUrl)
+    const conv = memoryStore.conversations.get(conversationId)
     if (conv) {
       conv.status = 'active'
-      conv.remote_handle = cleanHandle
       conv.last_message_snippet = 'Connected! You can now message each other.'
-      targetConvId = conv.id
     }
 
     const db = c.env?.DB
+    const now = Date.now()
     if (db) {
       try {
         await ensureD1Database(db)
-        // 1. Try finding friendship by remote_handle or by remote_instance_url
-        let existingFriendship: any = null
-        if (cleanHandle) {
-          existingFriendship = await db.prepare("SELECT * FROM federation_friendships WHERE remote_handle = ? LIMIT 1").bind(cleanHandle).first()
-        }
-        if (!existingFriendship && remoteUrl) {
-          existingFriendship = await db.prepare("SELECT * FROM federation_friendships WHERE remote_instance_url = ? OR remote_instance_url LIKE ? LIMIT 1")
-            .bind(remoteUrl, `%${remoteUrl.replace(/^https?:\/\//, '')}%`).first()
-        }
-
-        if (existingFriendship) {
-          matchedHandle = existingFriendship.remote_handle
-          targetConvId = 'conv_' + matchedHandle
-          await db.prepare("UPDATE federation_friendships SET status = 'active', remote_handle = ?, created_at = ? WHERE id = ?")
-            .bind(cleanHandle, now, existingFriendship.id).run()
-          await db.prepare("UPDATE conversations SET status = 'active', remote_handle = ?, last_message_snippet = 'Connected! You can now message each other.', last_message_at = ? WHERE id = ? OR remote_handle = ? OR remote_instance_url = ?")
-            .bind(cleanHandle, now, targetConvId, matchedHandle, remoteUrl).run()
-        } else {
-          // If no existing record was found, activate or insert
-          await db.prepare("UPDATE federation_friendships SET status = 'active', created_at = ? WHERE remote_handle = ?").bind(now, cleanHandle).run()
-          await db.prepare("UPDATE conversations SET status = 'active', last_message_snippet = 'Connected! You can now message each other.', last_message_at = ? WHERE id = ?").bind(now, conversationId).run()
-        }
+        await db.prepare("UPDATE federation_friendships SET status = 'active', created_at = ? WHERE remote_handle = ?").bind(now, cleanHandle).run()
+        await db.prepare("UPDATE conversations SET status = 'active', last_message_snippet = 'Connected! You can now message each other.', last_message_at = ? WHERE id = ?").bind(now, conversationId).run()
       } catch (d1Err: any) {
         console.warn('[D1 Remote Accept Warning]', d1Err?.message)
       }
@@ -922,12 +907,11 @@ app.post('/api/federation/v1/requests/accept', async (c) => {
 
     broadcastAllStreams('friend_accepted', {
       remoteHandle: cleanHandle,
-      previousHandle: matchedHandle,
-      conversationId: targetConvId,
+      conversationId,
       status: 'active',
-    })
+    }, c.env)
 
-    return c.json({ success: true, status: 'unlocked', remoteHandle: cleanHandle, conversationId: targetConvId })
+    return c.json({ success: true, status: 'unlocked' })
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
   }
@@ -955,7 +939,7 @@ app.post('/api/federation/requests/reject', async (c) => {
       }
     }
 
-    broadcastAllStreams('friendship_removed', { remoteHandle: cleanHandle })
+    broadcastAllStreams('friendship_removed', { remoteHandle: cleanHandle }, c.env)
     return c.json({ success: true })
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
@@ -1051,7 +1035,7 @@ app.post('/api/messaging', async (c) => {
     }
 
     emitUserEvent(actualSender, 'new_message', messageRecord)
-    broadcastAllStreams('new_message', messageRecord)
+    broadcastAllStreams('new_message', messageRecord, c.env)
 
     const targetUrl = remoteInstanceUrl || memoryStore.conversations.get(conversationId)?.remote_instance_url
     if (targetUrl) {
@@ -1133,7 +1117,7 @@ app.post('/api/federation/v1/messages', async (c) => {
       }
     }
 
-    broadcastAllStreams('new_message', messageRecord)
+    broadcastAllStreams('new_message', messageRecord, c.env)
     return c.json({ success: true, id: messageId }, 201)
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
@@ -1243,11 +1227,24 @@ app.get('/api/media/:id', async (c) => {
 })
 
 // ============================================================================
-// 11. Server-Sent Events Stream (100s Cloudflare Lifetime + 8s Heartbeat)
+// 11. Server-Sent Events Stream (Durable Object Global Room + Zero Polling)
 // ============================================================================
-app.get('/api/stream', (c) => {
+app.get('/api/stream', async (c) => {
+  // If Cloudflare Durable Object is bound, forward to the singleton cross-isolate room!
+  // This delivers messages across ALL isolates, PC, mobile, and tablets in 0 milliseconds!
+  if (c.env?.REALTIME_ROOM) {
+    try {
+      const id = c.env.REALTIME_ROOM.idFromName('global_room')
+      const stub = c.env.REALTIME_ROOM.get(id)
+      return stub.fetch(new Request('http://internal/stream', {
+        headers: c.req.raw.headers,
+      }))
+    } catch (e: any) {
+      console.warn('[DO Stream Route Fallback]', e?.message)
+    }
+  }
+
   const userId = c.req.query('userId') || 'usr_admin'
-  const db = c.env?.DB
 
   return streamSSE(c, async (stream) => {
     const clientId = 'client_' + Math.random().toString(36).slice(2, 9)
@@ -1275,11 +1272,9 @@ app.get('/api/stream', (c) => {
       }),
     })
 
-    // 100% PURE EVENT-DRIVEN SSE:
-    // ABSOLUTE ZERO DATABASE QUERIES WHILE SITTING IDLE!
-    // Incoming messages and friend events are pushed instantly in-memory via broadcastAllStreams.
-    // The interval below sends a pure lightweight byte ping every 25s solely to keep the TCP socket alive.
+    // 100% PURE EVENT-DRIVEN SSE (Fallback Mode):
     // Zero D1 reads, zero D1 writes, zero polling!
+    // TCP keepalive ping every 12s so socket stays active without database touches.
     const pingInterval = setInterval(async () => {
       try {
         await stream.writeSSE({
@@ -1290,14 +1285,15 @@ app.get('/api/stream', (c) => {
         clearInterval(pingInterval)
         activeStreams.get(userId)?.delete(clientRecord)
       }
-    }, 25000)
+    }, 12000)
 
     stream.onAbort(() => {
       clearInterval(pingInterval)
       activeStreams.get(userId)?.delete(clientRecord)
     })
 
-    await new Promise((resolve) => setTimeout(resolve, 95000))
+    // 25s stream lifecycle on fallback to ensure fast reconnection sync if DO is not bound
+    await new Promise((resolve) => setTimeout(resolve, 25000))
     clearInterval(pingInterval)
     activeStreams.get(userId)?.delete(clientRecord)
   })
@@ -1347,5 +1343,88 @@ app.all('*', async (c) => {
   }
   return c.notFound()
 })
+
+// ============================================================================
+// 13. Cloudflare Durable Object: RealtimeBroadcaster (Zero-Polling Cross-Isolate Hub)
+// ============================================================================
+export class RealtimeBroadcaster {
+  state: any
+  env: any
+  sessions: Set<ReadableStreamDefaultController>
+
+  constructor(state: any, env: any) {
+    this.state = state
+    this.env = env
+    this.sessions = new Set()
+
+    // Pure TCP ping every 15s to keep connections alive: ZERO database queries!
+    setInterval(() => {
+      if (this.sessions.size > 0) {
+        const pingPayload = new TextEncoder().encode(`event: ping\ndata: {"t":${Date.now()}}\n\n`)
+        for (const controller of this.sessions) {
+          try {
+            controller.enqueue(pingPayload)
+          } catch {
+            this.sessions.delete(controller)
+          }
+        }
+      }
+    }, 15000)
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url)
+
+    // Broadcast event across all connected clients on any device/isolate in 0ms!
+    if (url.pathname === '/broadcast') {
+      try {
+        const body: any = await request.json()
+        const eventName = body.event || 'new_message'
+        const eventData = typeof body.data === 'string' ? body.data : JSON.stringify(body.data)
+        const chunk = new TextEncoder().encode(`event: ${eventName}\ndata: ${eventData}\n\n`)
+
+        for (const controller of this.sessions) {
+          try {
+            controller.enqueue(chunk)
+          } catch {
+            this.sessions.delete(controller)
+          }
+        }
+        return new Response(JSON.stringify({ success: true, count: this.sessions.size }), {
+          headers: { 'Content-Type': 'application/json' },
+        })
+      } catch (e: any) {
+        return new Response(JSON.stringify({ error: e.message }), { status: 400 })
+      }
+    }
+
+    // Connect SSE client into global room
+    if (url.pathname === '/stream') {
+      let clientController: ReadableStreamDefaultController
+      const stream = new ReadableStream({
+        start: (controller) => {
+          clientController = controller
+          this.sessions.add(controller)
+          const welcome = new TextEncoder().encode('event: connected\ndata: {"status":"connected","source":"durable_object"}\n\n')
+          controller.enqueue(welcome)
+        },
+        cancel: () => {
+          this.sessions.delete(clientController)
+        },
+      })
+
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+        },
+      })
+    }
+
+    return new Response('Not Found', { status: 404 })
+  }
+}
 
 export default app

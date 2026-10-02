@@ -12,6 +12,22 @@
       "database_name": "chatze_db"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "REALTIME_ROOM",
+        "class_name": "RealtimeBroadcaster"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "RealtimeBroadcaster"
+      ]
+    }
+  ],
   "triggers": {
     "crons": [
       "0 3 * * *"
