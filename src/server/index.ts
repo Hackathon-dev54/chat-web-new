@@ -45,17 +45,17 @@ export function emitUserEvent(userId: string, eventName: string, payload: any) {
   }
 }
 
-export function broadcastAllStreams(eventName: string, payload: any, env?: any) {
+export async function broadcastAllStreams(eventName: string, payload: any, env?: any) {
   // 1. If Cloudflare Durable Object is available, broadcast across ALL global isolates & devices in 0ms!
   if (env?.REALTIME_ROOM) {
     try {
       const id = env.REALTIME_ROOM.idFromName('global_room')
       const stub = env.REALTIME_ROOM.get(id)
-      stub.fetch('http://internal/broadcast', {
+      await stub.fetch('http://internal/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ event: eventName, data: payload }),
-      }).catch((e: any) => console.warn('[DO Broadcast Warning]', e?.message))
+      })
     } catch (err: any) {
       console.warn('[DO Broadcast Error]', err?.message)
     }
@@ -813,7 +813,7 @@ app.post('/api/federation/v1/requests', async (c) => {
       }
     }
 
-    broadcastAllStreams('incoming_friend_request', {
+    await broadcastAllStreams('incoming_friend_request', {
       friendship: incomingFriendship,
       from_handle: cleanFromHandle,
       from_display_name: from_display_name || `@${cleanFromHandle}`,
@@ -862,7 +862,7 @@ app.post('/api/federation/requests/accept', async (c) => {
     }
     actualMyHandle = actualMyHandle || 'me'
 
-    broadcastAllStreams('friend_accepted', {
+    await broadcastAllStreams('friend_accepted', {
       remoteHandle: cleanHandle,
       conversationId,
       status: 'active',
@@ -918,7 +918,7 @@ app.post('/api/federation/v1/requests/accept', async (c) => {
       }
     }
 
-    broadcastAllStreams('friend_accepted', {
+    await broadcastAllStreams('friend_accepted', {
       remoteHandle: cleanHandle,
       conversationId,
       status: 'active',
@@ -952,7 +952,7 @@ app.post('/api/federation/requests/reject', async (c) => {
       }
     }
 
-    broadcastAllStreams('friendship_removed', { remoteHandle: cleanHandle }, c.env)
+    await broadcastAllStreams('friendship_removed', { remoteHandle: cleanHandle }, c.env)
     return c.json({ success: true })
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
@@ -1082,7 +1082,7 @@ app.post('/api/messaging', async (c) => {
     }
 
     emitUserEvent(actualSender, 'new_message', messageRecord)
-    broadcastAllStreams('new_message', messageRecord, c.env)
+    await broadcastAllStreams('new_message', messageRecord, c.env)
 
     const targetUrl = remoteInstanceUrl || memoryStore.conversations.get(conversationId)?.remote_instance_url
     if (targetUrl) {
@@ -1169,7 +1169,7 @@ app.post('/api/federation/v1/messages', async (c) => {
       }
     }
 
-    broadcastAllStreams('new_message', messageRecord, c.env)
+    await broadcastAllStreams('new_message', messageRecord, c.env)
     return c.json({ success: true, id: messageId }, 201)
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
@@ -1412,8 +1412,8 @@ export class RealtimeBroadcaster {
     // Pure TCP ping every 15s to keep connections alive: ZERO database queries!
     setInterval(() => {
       if (this.sessions.size > 0) {
-        const pingPayload = new TextEncoder().encode(`event: ping\ndata: {"t":${Date.now()}}\n\n`)
-        for (const controller of this.sessions) {
+        const pingPayload = new TextEncoder().encode(`: ping\n\nevent: ping\ndata: {"t":${Date.now()}}\n\n`)
+        for (const controller of Array.from(this.sessions)) {
           try {
             controller.enqueue(pingPayload)
           } catch {
@@ -1435,7 +1435,7 @@ export class RealtimeBroadcaster {
         const eventData = typeof body.data === 'string' ? body.data : JSON.stringify(body.data)
         const chunk = new TextEncoder().encode(`event: ${eventName}\ndata: ${eventData}\n\n`)
 
-        for (const controller of this.sessions) {
+        for (const controller of Array.from(this.sessions)) {
           try {
             controller.enqueue(chunk)
           } catch {
@@ -1457,7 +1457,8 @@ export class RealtimeBroadcaster {
         start: (controller) => {
           clientController = controller
           this.sessions.add(controller)
-          const welcome = new TextEncoder().encode('event: connected\ndata: {"status":"connected","source":"durable_object"}\n\n')
+          // Initial flush with comment to prevent mobile browser proxy buffering
+          const welcome = new TextEncoder().encode(': ok\n\nevent: connected\ndata: {"status":"connected","source":"durable_object"}\n\n')
           controller.enqueue(welcome)
         },
         cancel: () => {
@@ -1467,9 +1468,10 @@ export class RealtimeBroadcaster {
 
       return new Response(stream, {
         headers: {
-          'Content-Type': 'text/event-stream',
+          'Content-Type': 'text/event-stream; charset=utf-8',
           'Cache-Control': 'no-cache, no-transform',
           'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
           'Access-Control-Allow-Origin': '*',
         },
       })

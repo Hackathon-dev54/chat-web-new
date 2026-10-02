@@ -482,9 +482,6 @@ export function MessagingApp({
           const incoming: ChatMessage = JSON.parse(e.data)
           const currentActive = activeConvRef.current
 
-          // Persist to local device IndexedDB immediately
-          saveLocalMessage(incoming).catch(() => {})
-
           const otherHandle = (currentActive?.otherUser.username || '').toLowerCase().replace(/^@/, '')
           const myHandle = (currentUser.handle || '').toLowerCase().replace(/^@/, '')
           const senderH = (incoming.senderHandle || incoming.senderId || '').toLowerCase().replace(/^@/, '')
@@ -501,17 +498,24 @@ export function MessagingApp({
                 incoming.conversationId === 'conv_' + [myHandle, otherHandle].sort().join('_'))
           )
 
+          // Normalize conversation ID to match the active or other user's conversation format
+          const targetConvId = currentActive && isCurrentChat ? currentActive.id : ('conv_' + (senderH === myHandle ? recipH : senderH))
+          const normalizedIncoming = { ...incoming, conversationId: targetConvId }
+
+          // Persist to local device IndexedDB immediately with matching conversation ID
+          saveLocalMessage(normalizedIncoming).catch(() => {})
+
           // 1. If currently in this conversation, append message to view in 0ms!
           if (isCurrentChat) {
             setMessages((prev) => {
               if (prev.some((m) => m.id === incoming.id || (m.body === incoming.body && m.status === 'sending'))) {
                 return prev.map((m) =>
                   m.id === incoming.id || (m.body === incoming.body && m.status === 'sending')
-                    ? { ...incoming, status: 'sent' }
+                    ? { ...normalizedIncoming, status: 'sent' }
                     : m
                 )
               }
-              return [...prev, incoming]
+              return [...prev, normalizedIncoming]
             })
 
             const el = messagesContainerRef.current
@@ -649,8 +653,18 @@ export function MessagingApp({
 
       evtSource.onerror = () => {
         setStreamConnected(false)
+        if (!reconnectTimeout) {
+          reconnectTimeout = setTimeout(() => {
+            reconnectTimeout = null
+            if (!document.hidden) {
+              connectSSE()
+            }
+          }, 3000)
+        }
       }
     }
+
+    let reconnectTimeout: any = null
 
     // Connect SSE immediately
     connectSSE()
@@ -682,8 +696,16 @@ export function MessagingApp({
       }
     }
 
+    // Mobile touch interaction: recover stream immediately if phone cellular radio dropped TCP
+    const handleTouchRecovery = () => {
+      if (!evtSource) {
+        connectSSE()
+      }
+    }
+
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('focus', runSync)
+    window.addEventListener('touchstart', handleTouchRecovery, { passive: true })
 
     // BroadcastChannel for 0ms cross-tab instant local sync
     let bc: BroadcastChannel | null = null
@@ -700,8 +722,10 @@ export function MessagingApp({
 
     return () => {
       if (hiddenTimeout) clearTimeout(hiddenTimeout)
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('focus', runSync)
+      window.removeEventListener('touchstart', handleTouchRecovery)
       if (bc) bc.close()
       if (evtSource) evtSource.close()
     }
