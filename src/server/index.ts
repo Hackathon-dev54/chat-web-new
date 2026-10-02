@@ -1242,89 +1242,30 @@ app.get('/api/stream', (c) => {
       }),
     })
 
-    let lastKnownMessageTime = Date.now() - 3000
-    let lastKnownFriendshipTime = Date.now() - 3000
-
-    // Multi-Device Cross-Device Real-Time Sync Tick (every 5 seconds):
-    // When the same account is open on two devices (PC and Mobile), this queries D1
-    // so any message or friend request created or accepted on one device pushes to the other!
-    // Since inactive tabs suspend their SSE connection, this runs ONLY when the user
-    // actually has the screen open and looking at the app.
-    const syncInterval = setInterval(async () => {
+    // 100% PURE EVENT-DRIVEN SSE:
+    // ABSOLUTE ZERO DATABASE QUERIES WHILE SITTING IDLE!
+    // Incoming messages and friend events are pushed instantly in-memory via broadcastAllStreams.
+    // The interval below sends a pure lightweight byte ping every 25s solely to keep the TCP socket alive.
+    // Zero D1 reads, zero D1 writes, zero polling!
+    const pingInterval = setInterval(async () => {
       try {
-        if (db) {
-          // 1. Check for new messages across all devices/isolates
-          const msgRows: any = await db.prepare(
-            'SELECT * FROM messages WHERE created_at > ? ORDER BY created_at ASC LIMIT 25'
-          ).bind(lastKnownMessageTime).all()
-
-          if (msgRows?.results && msgRows.results.length > 0) {
-            for (const r of msgRows.results) {
-              lastKnownMessageTime = Math.max(lastKnownMessageTime, r.created_at)
-              await stream.writeSSE({
-                event: 'new_message',
-                data: JSON.stringify({
-                  id: r.id,
-                  conversationId: r.conversation_id,
-                  senderId: r.sender_id,
-                  body: r.content,
-                  createdAt: new Date(r.created_at).toISOString(),
-                  readAt: r.read_at ? new Date(r.read_at).toISOString() : null,
-                }),
-              })
-            }
-          }
-
-          // 2. Check for new or updated friendships
-          const fRows: any = await db.prepare(
-            'SELECT * FROM federation_friendships WHERE created_at > ? ORDER BY created_at ASC LIMIT 10'
-          ).bind(lastKnownFriendshipTime).all()
-
-          if (fRows?.results && fRows.results.length > 0) {
-            for (const f of fRows.results) {
-              lastKnownFriendshipTime = Math.max(lastKnownFriendshipTime, f.created_at)
-              if (f.direction === 'incoming' && f.status === 'pending') {
-                await stream.writeSSE({
-                  event: 'incoming_friend_request',
-                  data: JSON.stringify({
-                    friendship: f,
-                    from_handle: f.remote_handle,
-                    from_display_name: `@${f.remote_handle}`,
-                    from_instance_url: f.remote_instance_url,
-                  }),
-                })
-              } else if (f.status === 'active') {
-                await stream.writeSSE({
-                  event: 'friend_accepted',
-                  data: JSON.stringify({
-                    remoteHandle: f.remote_handle,
-                    conversationId: 'conv_' + f.remote_handle,
-                    status: 'active',
-                  }),
-                })
-              }
-            }
-          }
-        }
-
-        // Heartbeat ping every 5 seconds to keep connection healthy
         await stream.writeSSE({
           event: 'ping',
           data: JSON.stringify({ t: Date.now() }),
         })
       } catch {
-        clearInterval(syncInterval)
+        clearInterval(pingInterval)
         activeStreams.get(userId)?.delete(clientRecord)
       }
-    }, 5000)
+    }, 25000)
 
     stream.onAbort(() => {
-      clearInterval(syncInterval)
+      clearInterval(pingInterval)
       activeStreams.get(userId)?.delete(clientRecord)
     })
 
     await new Promise((resolve) => setTimeout(resolve, 95000))
-    clearInterval(syncInterval)
+    clearInterval(pingInterval)
     activeStreams.get(userId)?.delete(clientRecord)
   })
 })
