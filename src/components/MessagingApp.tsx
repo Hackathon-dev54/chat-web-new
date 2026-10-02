@@ -1338,7 +1338,7 @@ export function MessagingApp({
                     required
                     value={friendDomain}
                     onChange={(e) => setFriendDomain(e.target.value)}
-                    placeholder="e.g. chat-web-cfopou.askme50962.workers.dev"
+                    placeholder="e.g. your-friend.workers.dev"
                     className="w-full pl-10 pr-3.5 py-2.5 bg-[#202c33] border border-[#222e35] rounded-xl text-xs sm:text-sm text-[#e9edef] focus:outline-none focus:border-[#00a884]"
                   />
                 </div>

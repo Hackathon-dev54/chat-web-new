@@ -840,11 +840,13 @@ app.post('/api/federation/requests/accept', async (c) => {
 
     if (remoteInstanceUrl) {
       try {
+        const reqOrigin = new URL(c.req.url).origin
         await fetch(`${normalizeUrl(remoteInstanceUrl)}/api/federation/v1/requests/accept`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             from_handle: actualMyHandle,
+            from_instance_url: reqOrigin,
             accepted: true,
             timestamp: now,
           }),
@@ -863,26 +865,56 @@ app.post('/api/federation/requests/accept', async (c) => {
 // Peer approved our request
 app.post('/api/federation/v1/requests/accept', async (c) => {
   try {
-    const { from_handle } = await c.req.json()
+    const { from_handle, from_instance_url } = await c.req.json()
     const cleanHandle = (from_handle || '').replace(/^@/, '').trim().toLowerCase()
+    const remoteUrl = normalizeUrl(from_instance_url || c.req.header('Origin') || '')
     const conversationId = 'conv_' + cleanHandle
+    const now = Date.now()
+
+    let matchedHandle = cleanHandle
+    let targetConvId = conversationId
 
     for (const [, f] of memoryStore.friendships) {
-      if (f.remote_handle === cleanHandle) f.status = 'active'
+      if (f.remote_handle === cleanHandle || (remoteUrl && f.remote_instance_url && normalizeUrl(f.remote_instance_url) === remoteUrl)) {
+        f.status = 'active'
+        f.remote_handle = cleanHandle
+        matchedHandle = f.remote_handle
+      }
     }
-    const conv = memoryStore.conversations.get(conversationId)
+    const conv = memoryStore.conversations.get(conversationId) || Array.from(memoryStore.conversations.values()).find(cv => remoteUrl && cv.remote_instance_url && normalizeUrl(cv.remote_instance_url) === remoteUrl)
     if (conv) {
       conv.status = 'active'
+      conv.remote_handle = cleanHandle
       conv.last_message_snippet = 'Connected! You can now message each other.'
+      targetConvId = conv.id
     }
 
     const db = c.env?.DB
-    const now = Date.now()
     if (db) {
       try {
         await ensureD1Database(db)
-        await db.prepare("UPDATE federation_friendships SET status = 'active', created_at = ? WHERE remote_handle = ?").bind(now, cleanHandle).run()
-        await db.prepare("UPDATE conversations SET status = 'active', last_message_snippet = 'Connected! You can now message each other.', last_message_at = ? WHERE id = ?").bind(now, conversationId).run()
+        // 1. Try finding friendship by remote_handle or by remote_instance_url
+        let existingFriendship: any = null
+        if (cleanHandle) {
+          existingFriendship = await db.prepare("SELECT * FROM federation_friendships WHERE remote_handle = ? LIMIT 1").bind(cleanHandle).first()
+        }
+        if (!existingFriendship && remoteUrl) {
+          existingFriendship = await db.prepare("SELECT * FROM federation_friendships WHERE remote_instance_url = ? OR remote_instance_url LIKE ? LIMIT 1")
+            .bind(remoteUrl, `%${remoteUrl.replace(/^https?:\/\//, '')}%`).first()
+        }
+
+        if (existingFriendship) {
+          matchedHandle = existingFriendship.remote_handle
+          targetConvId = 'conv_' + matchedHandle
+          await db.prepare("UPDATE federation_friendships SET status = 'active', remote_handle = ?, created_at = ? WHERE id = ?")
+            .bind(cleanHandle, now, existingFriendship.id).run()
+          await db.prepare("UPDATE conversations SET status = 'active', remote_handle = ?, last_message_snippet = 'Connected! You can now message each other.', last_message_at = ? WHERE id = ? OR remote_handle = ? OR remote_instance_url = ?")
+            .bind(cleanHandle, now, targetConvId, matchedHandle, remoteUrl).run()
+        } else {
+          // If no existing record was found, activate or insert
+          await db.prepare("UPDATE federation_friendships SET status = 'active', created_at = ? WHERE remote_handle = ?").bind(now, cleanHandle).run()
+          await db.prepare("UPDATE conversations SET status = 'active', last_message_snippet = 'Connected! You can now message each other.', last_message_at = ? WHERE id = ?").bind(now, conversationId).run()
+        }
       } catch (d1Err: any) {
         console.warn('[D1 Remote Accept Warning]', d1Err?.message)
       }
@@ -890,11 +922,12 @@ app.post('/api/federation/v1/requests/accept', async (c) => {
 
     broadcastAllStreams('friend_accepted', {
       remoteHandle: cleanHandle,
-      conversationId,
+      previousHandle: matchedHandle,
+      conversationId: targetConvId,
       status: 'active',
     })
 
-    return c.json({ success: true, status: 'unlocked' })
+    return c.json({ success: true, status: 'unlocked', remoteHandle: cleanHandle, conversationId: targetConvId })
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
   }
