@@ -553,18 +553,31 @@ app.get('/api/sync', async (c) => {
     try {
       await ensureD1Database(db)
       if (conversationId) {
+        let reverseConvId = conversationId
+        if (conversationId.startsWith('conv_')) {
+          const adminUser = memoryStore.users.get('usr_admin')
+          const adminHandle = adminUser?.handle || 'admin'
+          reverseConvId = 'conv_' + adminHandle
+        }
         const msgRows: any = await db.prepare(
-          'SELECT * FROM messages WHERE conversation_id = ? AND created_at > ? ORDER BY created_at ASC LIMIT 50'
-        ).bind(conversationId, since).all()
+          'SELECT * FROM messages WHERE (conversation_id = ? OR conversation_id = ?) AND created_at > ? ORDER BY created_at ASC LIMIT 50'
+        ).bind(conversationId, reverseConvId, since).all()
         if (msgRows?.results) {
-          newMessages = msgRows.results.map((r: any) => ({
-            id: r.id,
-            conversationId: r.conversation_id,
-            senderId: r.sender_id,
-            body: r.content,
-            createdAt: new Date(r.created_at).toISOString(),
-            readAt: r.read_at ? new Date(r.read_at).toISOString() : null,
-          }))
+          const seen = new Set<string>()
+          newMessages = []
+          for (const r of msgRows.results) {
+            if (!seen.has(r.id)) {
+              seen.add(r.id)
+              newMessages.push({
+                id: r.id,
+                conversationId: r.conversation_id,
+                senderId: r.sender_id,
+                body: r.content,
+                createdAt: new Date(r.created_at).toISOString(),
+                readAt: r.read_at ? new Date(r.read_at).toISOString() : null,
+              })
+            }
+          }
         }
       }
 
@@ -954,20 +967,37 @@ app.get('/api/messaging', async (c) => {
   if (!conversationId) return c.json({ messages: [] })
   const db = c.env?.DB
 
+  // Bidirectional resolution: if query is conv_alice, also resolve reverse conv_bob if needed
+  let reverseConvId = conversationId
+  if (conversationId.startsWith('conv_')) {
+    const handlePart = conversationId.replace('conv_', '')
+    const adminUser = memoryStore.users.get('usr_admin')
+    const adminHandle = adminUser?.handle || 'admin'
+    reverseConvId = 'conv_' + adminHandle
+  }
+
   if (db) {
     try {
       await ensureD1Database(db)
-      const rows: any = await db.prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC')
-        .bind(conversationId).all()
+      const rows: any = await db.prepare(
+        'SELECT * FROM messages WHERE conversation_id = ? OR conversation_id = ? ORDER BY created_at ASC'
+      ).bind(conversationId, reverseConvId).all()
       if (rows?.results) {
-        const mapped = rows.results.map((r: any) => ({
-          id: r.id,
-          conversationId: r.conversation_id,
-          senderId: r.sender_id,
-          body: r.content,
-          createdAt: new Date(r.created_at).toISOString(),
-          readAt: r.read_at ? new Date(r.read_at).toISOString() : null,
-        }))
+        const seen = new Set<string>()
+        const mapped: any[] = []
+        for (const r of rows.results) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id)
+            mapped.push({
+              id: r.id,
+              conversationId: r.conversation_id,
+              senderId: r.sender_id,
+              body: r.content,
+              createdAt: new Date(r.created_at).toISOString(),
+              readAt: r.read_at ? new Date(r.read_at).toISOString() : null,
+            })
+          }
+        }
         return c.json({ messages: mapped })
       }
     } catch (d1Err: any) {
@@ -975,9 +1005,15 @@ app.get('/api/messaging', async (c) => {
     }
   }
 
+  const seen = new Set<string>()
   const msgs = memoryStore.messages
-    .filter((m) => m.conversation_id === conversationId)
+    .filter((m) => m.conversation_id === conversationId || m.conversation_id === reverseConvId)
     .sort((a, b) => a.created_at - b.created_at)
+    .filter((m) => {
+      if (seen.has(m.id)) return false
+      seen.add(m.id)
+      return true
+    })
     .map((m) => ({
       id: m.id,
       conversationId: m.conversation_id,
@@ -996,11 +1032,15 @@ app.post('/api/messaging', async (c) => {
     const messageId = 'msg_' + Math.random().toString(36).slice(2, 9)
     const now = Date.now()
     const actualSender = senderId || 'usr_admin'
+    const cleanSenderHandle = (myHandle || '').replace(/^@/, '').trim().toLowerCase()
+    const cleanRemoteHandle = (remoteHandle || '').replace(/^@/, '').trim().toLowerCase()
 
     const messageRecord = {
       id: messageId,
       conversationId: conversationId || 'conv_general',
       senderId: actualSender,
+      senderHandle: cleanSenderHandle,
+      recipientHandle: cleanRemoteHandle,
       body: body || '',
       createdAt: new Date(now).toISOString(),
       readAt: null,
@@ -1021,14 +1061,21 @@ app.post('/api/messaging', async (c) => {
       conv.last_message_at = now
     }
 
+    const reverseConvId = cleanSenderHandle ? 'conv_' + cleanSenderHandle : null
+    const reverseConv = reverseConvId ? memoryStore.conversations.get(reverseConvId) : null
+    if (reverseConv) {
+      reverseConv.last_message_snippet = messageRecord.body
+      reverseConv.last_message_at = now
+    }
+
     const db = c.env?.DB
     if (db) {
       try {
         await ensureD1Database(db)
         await db.prepare('INSERT INTO messages (id, conversation_id, sender_id, content, created_at, read_at) VALUES (?, ?, ?, ?, ?, NULL)')
           .bind(messageRecord.id, messageRecord.conversationId, messageRecord.senderId, messageRecord.body, now).run()
-        await db.prepare('UPDATE conversations SET last_message_snippet = ?, last_message_at = ? WHERE id = ?')
-          .bind(messageRecord.body, now, messageRecord.conversationId).run()
+        await db.prepare('UPDATE conversations SET last_message_snippet = ?, last_message_at = ? WHERE id = ? OR (id = ? AND ? IS NOT NULL)')
+          .bind(messageRecord.body, now, messageRecord.conversationId, reverseConvId, reverseConvId).run()
       } catch (d1Err: any) {
         console.warn('[D1 Message Insert Warning]', d1Err?.message)
       }
@@ -1081,10 +1128,15 @@ app.post('/api/federation/v1/messages', async (c) => {
     const messageId = 'msg_in_' + Math.random().toString(36).slice(2, 9)
     const now = timestamp || Date.now()
 
+    const adminUser = memoryStore.users.get('usr_admin')
+    const adminHandle = adminUser?.handle || 'admin'
+
     const messageRecord = {
       id: messageId,
       conversationId,
       senderId: cleanSender,
+      senderHandle: cleanSender,
+      recipientHandle: adminHandle,
       body: body || '',
       createdAt: new Date(now).toISOString(),
       readAt: null,

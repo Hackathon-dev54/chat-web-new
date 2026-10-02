@@ -137,6 +137,8 @@ interface ChatMessage {
   id: string
   conversationId: string
   senderId: string
+  senderHandle?: string
+  recipientHandle?: string
   body: string
   createdAt: string
   readAt?: string | null
@@ -483,8 +485,24 @@ export function MessagingApp({
           // Persist to local device IndexedDB immediately
           saveLocalMessage(incoming).catch(() => {})
 
-          // 1. If currently in this conversation, append message to view
-          if (currentActive && incoming.conversationId === currentActive.id) {
+          const otherHandle = (currentActive?.otherUser.username || '').toLowerCase().replace(/^@/, '')
+          const myHandle = (currentUser.handle || '').toLowerCase().replace(/^@/, '')
+          const senderH = (incoming.senderHandle || incoming.senderId || '').toLowerCase().replace(/^@/, '')
+          const recipH = (incoming.recipientHandle || '').toLowerCase().replace(/^@/, '')
+
+          // Match message to current open conversation from either sender or recipient side:
+          const isCurrentChat = Boolean(
+            currentActive &&
+              (incoming.conversationId === currentActive.id ||
+                senderH === otherHandle ||
+                (recipH === otherHandle && senderH === myHandle) ||
+                incoming.conversationId === 'conv_' + otherHandle ||
+                incoming.conversationId === 'conv_' + myHandle ||
+                incoming.conversationId === 'conv_' + [myHandle, otherHandle].sort().join('_'))
+          )
+
+          // 1. If currently in this conversation, append message to view in 0ms!
+          if (isCurrentChat) {
             setMessages((prev) => {
               if (prev.some((m) => m.id === incoming.id || (m.body === incoming.body && m.status === 'sending'))) {
                 return prev.map((m) =>
@@ -507,14 +525,44 @@ export function MessagingApp({
 
           // 2. Update conversation snippet in memory and IndexedDB
           setConversations((prev) => {
-            const index = prev.findIndex((c) => c.id === incoming.conversationId)
+            const index = prev.findIndex((c) => {
+              const cHandle = (c.otherUser.username || '').toLowerCase().replace(/^@/, '')
+              return (
+                c.id === incoming.conversationId ||
+                cHandle === senderH ||
+                cHandle === recipH ||
+                c.id === 'conv_' + senderH ||
+                c.id === 'conv_' + recipH ||
+                c.id === 'conv_' + [myHandle, cHandle].sort().join('_')
+              )
+            })
+
             const msgTime = new Date(incoming.createdAt).getTime()
             if (index !== -1) {
               const updated = [...prev]
               const conv = { ...updated[index] }
               conv.lastMessage = { content: incoming.body, createdAt: msgTime }
+              if (!isCurrentChat && senderH !== myHandle) {
+                conv.unreadCount = (conv.unreadCount || 0) + 1
+              }
               updated.splice(index, 1)
               const newConvs = [conv, ...updated]
+              saveLocalConversations(newConvs).catch(() => {})
+              return newConvs
+            } else if (senderH && senderH !== myHandle) {
+              // Automatically add new incoming contact conversation to the sidebar!
+              const newConv: Conversation = {
+                id: incoming.conversationId || 'conv_' + senderH,
+                otherUser: {
+                  id: senderH,
+                  username: senderH,
+                  displayName: `@${senderH}`,
+                },
+                status: 'active',
+                lastMessage: { content: incoming.body, createdAt: msgTime },
+                unreadCount: 1,
+              }
+              const newConvs = [newConv, ...prev]
               saveLocalConversations(newConvs).catch(() => {})
               return newConvs
             }
