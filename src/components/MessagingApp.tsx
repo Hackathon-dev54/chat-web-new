@@ -35,7 +35,7 @@ import {
   setLocalMeta,
 } from '../lib/db'
 import { PWAInstallButton } from './PWAInstallButton'
-import { NotificationToggle } from './NotificationToggle'
+import { NotificationToggleButton } from './NotificationToggleButton'
 import { OfflineIndicator } from './OfflineIndicator'
 
 
@@ -983,8 +983,8 @@ export function MessagingApp({
             </div>
 
             <div className="flex items-center gap-1">
-              <NotificationToggle />
               <PWAInstallButton className="hidden sm:inline-flex" />
+              <NotificationToggleButton userHandle={currentUser.handle} />
               <button
                 onClick={() => setShowIdentityModal(true)}
                 title="My Instance Address / Share"
@@ -1194,8 +1194,8 @@ export function MessagingApp({
               </div>
 
               <div className="flex items-center gap-2 text-xs text-[#8696a0] shrink-0">
-                <NotificationToggle />
                 <PWAInstallButton />
+                <NotificationToggleButton userHandle={currentUser.handle} />
                 <span className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-[#111b21] border border-[#202c33] text-[10px] sm:text-[11px]">
                   <span className={`w-2 h-2 rounded-full ${streamConnected ? 'bg-[#00a884]' : 'bg-amber-400 animate-ping'}`} />
                   <span className="hidden sm:inline">{streamConnected ? '100s SSE Live' : 'Reconnecting...'}</span>
