@@ -1103,11 +1103,10 @@ app.post('/api/messaging', async (c) => {
       conversationId: messageRecord.conversationId,
       url: `/?conv=${messageRecord.conversationId}`,
     }
-    const pushPromise = sendPushNotification(c.env, recipientToNotify, pushNotification)
-    if ((c as any).executionCtx?.waitUntil) {
-      ;(c as any).executionCtx.waitUntil(pushPromise)
-    } else {
-      pushPromise.catch(() => {})
+    try {
+      await sendPushNotification(c.env, recipientToNotify, pushNotification)
+    } catch (e: any) {
+      console.warn('[Push Notification Error]', e?.message)
     }
 
     const targetUrl = remoteInstanceUrl || memoryStore.conversations.get(conversationId)?.remote_instance_url
@@ -1204,11 +1203,10 @@ app.post('/api/federation/v1/messages', async (c) => {
       conversationId: messageRecord.conversationId,
       url: `/?conv=${messageRecord.conversationId}`,
     }
-    const pushPromise = sendPushNotification(c.env, null, pushNotification)
-    if ((c as any).executionCtx?.waitUntil) {
-      ;(c as any).executionCtx.waitUntil(pushPromise)
-    } else {
-      pushPromise.catch(() => {})
+    try {
+      await sendPushNotification(c.env, null, pushNotification)
+    } catch (e: any) {
+      console.warn('[Federation Inbound Push Error]', e?.message)
     }
 
     return c.json({ success: true, id: messageId }, 201)

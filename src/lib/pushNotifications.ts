@@ -61,13 +61,20 @@ export async function subscribeToPushNotifications(userHandle: string): Promise<
     const reg = await navigator.serviceWorker.ready
     let subscription = await reg.pushManager.getSubscription()
 
-    if (!subscription) {
-      const appServerKey = urlBase64ToUint8Array(publicKey)
-      subscription = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: appServerKey as any,
-      })
+    // Clean refresh: unsubscribe any previous or stale token so we get a fresh token matching the current VAPID key
+    if (subscription) {
+      try {
+        await subscription.unsubscribe()
+      } catch (unsubErr) {
+        console.warn('[SW Push Unsubscribe previous]', unsubErr)
+      }
     }
+
+    const appServerKey = urlBase64ToUint8Array(publicKey)
+    subscription = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: appServerKey as any,
+    })
 
     // 4. Send subscription to backend
     const subJson = subscription.toJSON()
@@ -118,7 +125,13 @@ export async function unsubscribeFromPushNotifications(): Promise<boolean> {
   }
 }
 
-export async function sendTestNotification(userHandle: string): Promise<{ success: boolean; error?: string }> {
+export async function sendTestNotification(userHandle: string): Promise<{
+  success: boolean
+  dispatched?: number
+  successful?: number
+  details?: string
+  error?: string
+}> {
   try {
     const res = await fetch('/api/push/test', {
       method: 'POST',
@@ -129,9 +142,24 @@ export async function sendTestNotification(userHandle: string): Promise<{ succes
     })
     const data = await res.json()
     if (!res.ok) {
-      return { success: false, error: data.error || 'Failed to trigger test push' }
+      return { success: false, error: data.error || 'Server error triggering test' }
     }
-    return { success: true }
+    if (data.dispatched === 0) {
+      return {
+        success: false,
+        error: 'No active device registered in database yet. Tap "Enable Notifications" on this device first.',
+      }
+    }
+    if (data.successful > 0) {
+      return {
+        success: true,
+        dispatched: data.dispatched,
+        successful: data.successful,
+        details: `Successfully sent to ${data.successful} device(s)`,
+      }
+    }
+    const firstErr = data.results?.[0]?.error || 'Push gateway rejected notification'
+    return { success: false, error: firstErr }
   } catch (err: any) {
     return { success: false, error: err.message || 'Network error triggering test' }
   }

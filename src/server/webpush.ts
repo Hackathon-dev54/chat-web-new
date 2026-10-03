@@ -136,6 +136,12 @@ export async function sendPushNotification(
           ...payload.headers,
         }
 
+        // RFC 8030 High Urgency for instant Android FCM wake & delivery
+        headers['Urgency'] = 'high'
+        headers['urgency'] = 'high'
+        headers['TTL'] = '86400'
+        headers['ttl'] = '86400'
+
         // Apple APNs Web Push Requirements for iOS Safari:
         // 'apns-push-type: alert' and 'apns-priority: 10' are mandatory for immediate lock-screen wake
         if (sub.endpoint.includes('push.apple.com')) {
