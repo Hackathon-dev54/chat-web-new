@@ -114,13 +114,12 @@ self.addEventListener('push', (event) => {
   const notificationOptions = {
     body: data.body,
     icon: '/pwa-192x192.png',
-    badge: '/icon.svg',
-    vibrate: [100, 50, 100],
+    badge: '/icon-light-32x32.png',
     data: {
       url: data.url || '/',
       conversationId: data.conversationId,
     },
-    tag: data.conversationId ? `conv_${data.conversationId}` : 'chatze_chat',
+    tag: data.conversationId ? `conv_${data.conversationId}` : undefined,
     renotify: true,
   }
 

@@ -1,11 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
-import {
-  DEFAULT_VAPID_PUBLIC_KEY,
-  dispatchUserPushNotifications,
-  memoryPushSubscriptions,
-} from './webpush'
 
 type Bindings = {
   DB?: any // Cloudflare D1 Database binding
@@ -13,9 +8,6 @@ type Bindings = {
   REALTIME_ROOM?: any // Cloudflare Durable Object binding for 0ms cross-isolate push
   JWT_SECRET?: string
   NODE_ENV?: string
-  VAPID_PUBLIC_KEY?: string
-  VAPID_PRIVATE_KEY?: string
-  VAPID_SUBJECT?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -278,14 +270,12 @@ const D1_INIT_STATEMENTS = [
   'CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, sender_id TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL, read_at INTEGER)',
   'CREATE TABLE IF NOT EXISTS federation_friendships (id TEXT PRIMARY KEY, local_user_id TEXT NOT NULL, remote_handle TEXT NOT NULL, remote_instance_url TEXT NOT NULL, status TEXT DEFAULT "pending", direction TEXT DEFAULT "outgoing", created_at INTEGER NOT NULL)',
   'CREATE TABLE IF NOT EXISTS media_attachments (id TEXT PRIMARY KEY, content_type TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL)',
-  'CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, user_handle TEXT NOT NULL, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at INTEGER NOT NULL)',
   'CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at DESC)',
   'CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at DESC)',
   'CREATE INDEX IF NOT EXISTS idx_friendships_created_at ON federation_friendships(created_at DESC)',
   'CREATE INDEX IF NOT EXISTS idx_conversations_user_a ON conversations(user_a, last_message_at DESC)',
   'CREATE INDEX IF NOT EXISTS idx_conversations_user_b ON conversations(user_b, last_message_at DESC)',
-  'CREATE INDEX IF NOT EXISTS idx_sessions_token_expires ON sessions(token, expires_at)',
-  'CREATE INDEX IF NOT EXISTS idx_push_user_handle ON push_subscriptions(user_handle)'
+  'CREATE INDEX IF NOT EXISTS idx_sessions_token_expires ON sessions(token, expires_at)'
 ]
 
 async function ensureD1Database(db: any) {
@@ -464,88 +454,6 @@ app.post('/api/auth/sign-out', async (c) => {
     }
   }
   return c.json({ success: true })
-})
-
-// ============================================================================
-// 6.5 Web Push Notification Subscriptions (RFC 8291 & RFC 8292)
-// ============================================================================
-app.get('/api/push/vapid-public-key', (c) => {
-  const publicKey = c.env?.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY
-  return c.json({ publicKey })
-})
-
-app.post('/api/push/subscribe', async (c) => {
-  try {
-    const authHeader = c.req.header('Authorization') || ''
-    const token = authHeader.replace(/^Bearer\s+/i, '').trim()
-    const user = await validateSession(token, c.env?.DB)
-    if (!user) {
-      return c.json({ error: 'Unauthorized: Session invalid' }, 401)
-    }
-
-    const { endpoint, keys, userAgent } = await c.req.json()
-    if (!endpoint || !keys?.p256dh || !keys?.auth) {
-      return c.json({ error: 'Invalid subscription payload: endpoint and keys are required' }, 400)
-    }
-
-    const subId = 'sub_' + Math.random().toString(36).slice(2, 9)
-    const cleanHandle = user.handle.replace(/^@/, '').toLowerCase()
-    const now = Date.now()
-
-    memoryPushSubscriptions.set(subId, {
-      id: subId,
-      userHandle: cleanHandle,
-      endpoint,
-      p256dh: keys.p256dh,
-      auth: keys.auth,
-      userAgent: userAgent || 'Web/PWA Client',
-      createdAt: now,
-    })
-
-    const db = c.env?.DB
-    if (db) {
-      try {
-        await ensureD1Database(db)
-        await db
-          .prepare(
-            'INSERT OR REPLACE INTO push_subscriptions (id, user_handle, endpoint, p256dh, auth, user_agent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          )
-          .bind(subId, cleanHandle, endpoint, keys.p256dh, keys.auth, userAgent || 'Web/PWA Client', now)
-          .run()
-      } catch (d1Err: any) {
-        console.warn('[D1 Push Subscribe Warning]', d1Err?.message)
-      }
-    }
-
-    return c.json({ success: true, id: subId })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 400)
-  }
-})
-
-app.post('/api/push/unsubscribe', async (c) => {
-  try {
-    const { endpoint } = await c.req.json()
-    if (!endpoint) return c.json({ error: 'Endpoint required' }, 400)
-
-    for (const [id, sub] of memoryPushSubscriptions) {
-      if (sub.endpoint === endpoint) {
-        memoryPushSubscriptions.delete(id)
-      }
-    }
-
-    const db = c.env?.DB
-    if (db) {
-      try {
-        await ensureD1Database(db)
-        await db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?').bind(endpoint).run()
-      } catch (e) {}
-    }
-
-    return c.json({ success: true })
-  } catch (err: any) {
-    return c.json({ error: err.message }, 400)
-  }
 })
 
 // ============================================================================
@@ -912,17 +820,6 @@ app.post('/api/federation/v1/requests', async (c) => {
       from_instance_url: remoteUrl,
     }, c.env)
 
-    const adminUser = memoryStore.users.get('usr_admin')
-    const adminH = adminUser?.handle || 'admin'
-    const pushReqPromise = dispatchUserPushNotifications(c.env, adminH, {
-      title: 'New Contact Request',
-      body: `@${cleanFromHandle} sent you a connection request`,
-      conversationId: incomingConv.id,
-      url: `/?conv=${incomingConv.id}`,
-    })
-    if (c.executionCtx) c.executionCtx.waitUntil(pushReqPromise)
-    else pushReqPromise.catch(() => {})
-
     return c.json({ success: true, status: 'received' }, 201)
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
@@ -1216,19 +1113,6 @@ app.post('/api/messaging', async (c) => {
       }
     }
 
-    // Background Web Push Notification to local recipient if present
-    const cleanRecip = (remoteHandle || memoryStore.conversations.get(conversationId)?.remote_handle || '').replace(/^@/, '').toLowerCase()
-    if (cleanRecip) {
-      const pushTask = dispatchUserPushNotifications(c.env, cleanRecip, {
-        title: `@${cleanSenderHandle || 'Contact'}`,
-        body: messageRecord.body.startsWith('[img:') ? '📷 Sent a photo' : messageRecord.body,
-        conversationId: messageRecord.conversationId,
-        url: `/?conv=${messageRecord.conversationId}`,
-      })
-      if (c.executionCtx) c.executionCtx.waitUntil(pushTask)
-      else pushTask.catch(() => {})
-    }
-
     return c.json({ success: true, message: messageRecord }, 201)
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
@@ -1286,17 +1170,6 @@ app.post('/api/federation/v1/messages', async (c) => {
     }
 
     await broadcastAllStreams('new_message', messageRecord, c.env)
-
-    // Background Web Push Notification to local admin
-    const pushTask = dispatchUserPushNotifications(c.env, adminHandle, {
-      title: `@${cleanSender}`,
-      body: messageRecord.body.startsWith('[img:') ? '📷 Sent a photo' : messageRecord.body,
-      conversationId,
-      url: `/?conv=${conversationId}`,
-    })
-    if (c.executionCtx) c.executionCtx.waitUntil(pushTask)
-    else pushTask.catch(() => {})
-
     return c.json({ success: true, id: messageId }, 201)
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
