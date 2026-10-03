@@ -36,6 +36,7 @@ import {
 } from '../lib/db'
 import { PWAInstallButton } from './PWAInstallButton'
 import { NotificationToggleButton } from './NotificationToggleButton'
+import { NotificationPermissionBanner } from './NotificationPermissionBanner'
 import { OfflineIndicator } from './OfflineIndicator'
 
 
@@ -957,13 +958,15 @@ export function MessagingApp({
   }, [conversations, searchQuery, inboxFilter])
 
   return (
-    <div className="flex h-screen w-full bg-[#0b141a] text-[#e9edef] overflow-hidden font-sans select-none">
-      {/* 1. Sidebar: Full width on mobile when no active chat, 80-96 width on desktop */}
-      <aside
-        className={`${
-          activeConv ? 'hidden md:flex' : 'flex'
-        } w-full md:w-80 lg:w-96 border-r border-[#202c33] bg-[#111b21] flex-col shrink-0 h-full`}
-      >
+    <div className="flex flex-col h-screen w-full bg-[#0b141a] text-[#e9edef] overflow-hidden font-sans select-none">
+      <NotificationPermissionBanner userHandle={currentUser.handle} />
+      <div className="flex flex-1 w-full overflow-hidden">
+        {/* 1. Sidebar: Full width on mobile when no active chat, 80-96 width on desktop */}
+        <aside
+          className={`${
+            activeConv ? 'hidden md:flex' : 'flex'
+          } w-full md:w-80 lg:w-96 border-r border-[#202c33] bg-[#111b21] flex-col shrink-0 h-full`}
+        >
         {/* Header Bar */}
         <div className="p-3.5 border-b border-[#202c33] space-y-3 bg-[#202c33]/40">
           <div className="flex items-center justify-between">
@@ -1696,6 +1699,8 @@ export function MessagingApp({
           </div>
         </div>
       )}
+
+      </div>
 
       {/* Offline Connectivity Status Pill */}
       <OfflineIndicator />

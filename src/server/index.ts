@@ -1494,6 +1494,23 @@ app.post('/api/push/unsubscribe', async (c) => {
   }
 })
 
+app.post('/api/push/test', async (c) => {
+  try {
+    const { userHandle } = await c.req.json()
+    const cleanHandle = (userHandle || 'admin').replace(/^@/, '').trim().toLowerCase()
+
+    await sendPushNotification(c.env, cleanHandle, {
+      title: 'Chatze Notification Test',
+      body: '🎉 Notifications working on your device! You will receive alerts when new messages arrive.',
+      url: '/',
+    })
+
+    return c.json({ success: true, message: 'Test notification dispatched' })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400)
+  }
+})
+
 // Fallback to static assets in production on Cloudflare Workers
 app.all('*', async (c) => {
   if (c.env?.ASSETS) {

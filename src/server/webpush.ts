@@ -5,7 +5,7 @@ import { buildPushPayload } from '@block65/webcrypto-web-push'
 // VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY
 export const DEFAULT_VAPID_PUBLIC_KEY = 'BJnY0CoLcsFvReeBAmBfdP9K-KIu4fROfOtcxsjEomm7yJnoIbLm-ukx7iHJabuwMUE2CcbptDsVV53BZ5YjYJQ'
 export const DEFAULT_VAPID_PRIVATE_KEY = 'FpbM_gTPI8cDU_olIxHGpOnRk4MhrFSNu-GEUCo8Gw0'
-export const DEFAULT_VAPID_SUBJECT = 'mailto:admin@chatze.local'
+export const DEFAULT_VAPID_SUBJECT = 'mailto:support@chatze.app'
 
 export interface PushNotificationPayload {
   title: string

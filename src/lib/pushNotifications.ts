@@ -117,3 +117,23 @@ export async function unsubscribeFromPushNotifications(): Promise<boolean> {
     return false
   }
 }
+
+export async function sendTestNotification(userHandle: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/push/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userHandle: (userHandle || 'admin').replace(/^@/, '').trim().toLowerCase(),
+      }),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      return { success: false, error: data.error || 'Failed to trigger test push' }
+    }
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Network error triggering test' }
+  }
+}
+

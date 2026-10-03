@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react'
-import { Bell, BellOff, BellRing, Smartphone, X, Check, AlertCircle, Loader2 } from 'lucide-react'
+import { Bell, BellRing, Smartphone, X, Check, AlertCircle, Loader2, Sparkles, Volume2 } from 'lucide-react'
 import {
   isPushSupported,
   isIosWithoutPwa,
   getExistingPushSubscription,
   subscribeToPushNotifications,
   unsubscribeFromPushNotifications,
+  sendTestNotification,
 } from '../lib/pushNotifications'
 
 interface NotificationToggleButtonProps {
@@ -20,6 +21,7 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
   const [isSubscribed, setIsSubscribed] = useState(false)
   const [loading, setLoading] = useState(false)
   const [showModal, setShowModal] = useState(false)
+  const [testSent, setTestSent] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>('default')
 
@@ -45,12 +47,8 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
     }
 
     if (isSubscribed) {
-      setLoading(true)
-      const success = await unsubscribeFromPushNotifications()
-      if (success) {
-        setIsSubscribed(false)
-      }
-      setLoading(false)
+      // If already subscribed, clicking opens the status & test modal
+      setShowModal(true)
       return
     }
 
@@ -61,9 +59,32 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
     if (result.success) {
       setIsSubscribed(true)
       setPermission('granted')
+      setShowModal(true) // Show confirmation and test button
     } else {
       setErrorMsg(result.error || 'Could not enable notifications')
       setShowModal(true)
+    }
+  }
+
+  const handleUnsubscribe = async () => {
+    setLoading(true)
+    const success = await unsubscribeFromPushNotifications()
+    if (success) {
+      setIsSubscribed(false)
+      setShowModal(false)
+    }
+    setLoading(false)
+  }
+
+  const handleTestAlert = async () => {
+    setLoading(true)
+    const res = await sendTestNotification(userHandle)
+    setLoading(false)
+    if (res.success) {
+      setTestSent(true)
+      setTimeout(() => setTestSent(false), 5000)
+    } else {
+      setErrorMsg(res.error || 'Could not send test notification')
     }
   }
 
@@ -81,7 +102,7 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
                 <BellRing className="w-4 h-4" />
               </div>
               <h3 className="text-sm font-semibold text-white">
-                {isIos ? 'iPhone Push Notifications' : 'Push Notifications'}
+                {isIos ? 'iPhone Push Setup' : 'Push Notifications'}
               </h3>
             </div>
             <button
@@ -96,23 +117,49 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
             {isIos ? (
               <>
                 <p className="text-white font-medium">
-                  Apple requires iOS apps to be added to your Home Screen before enabling background lock-screen notifications.
+                  Apple requires iOS apps to be launched from your Home Screen before enabling notifications:
                 </p>
                 <div className="space-y-2 pt-1">
                   <div className="flex items-start gap-2.5">
-                    <span className="w-5 h-5 rounded-full bg-[#202c33] text-white flex items-center justify-center shrink-0 font-bold">1</span>
-                    <p>Tap the <strong className="text-white">Share</strong> button in Safari (box with arrow pointing up).</p>
+                    <span className="w-5 h-5 rounded-full bg-[#00a884] text-slate-950 flex items-center justify-center shrink-0 font-bold">1</span>
+                    <p>Tap <strong className="text-white">Share</strong> in Safari (box with arrow pointing up).</p>
                   </div>
                   <div className="flex items-start gap-2.5">
-                    <span className="w-5 h-5 rounded-full bg-[#202c33] text-white flex items-center justify-center shrink-0 font-bold">2</span>
-                    <p>Select <strong className="text-white">Add to Home Screen</strong>.</p>
+                    <span className="w-5 h-5 rounded-full bg-[#00a884] text-slate-950 flex items-center justify-center shrink-0 font-bold">2</span>
+                    <p>Tap <strong className="text-white">Add to Home Screen</strong>.</p>
                   </div>
                   <div className="flex items-start gap-2.5">
-                    <span className="w-5 h-5 rounded-full bg-[#202c33] text-white flex items-center justify-center shrink-0 font-bold">3</span>
-                    <p>Open Chatze from your Home Screen and tap this bell to activate instant notifications.</p>
+                    <span className="w-5 h-5 rounded-full bg-[#00a884] text-slate-950 flex items-center justify-center shrink-0 font-bold">3</span>
+                    <p>Launch Chatze from your Home Screen and tap this bell to activate alerts.</p>
                   </div>
                 </div>
               </>
+            ) : isSubscribed ? (
+              <div className="space-y-3">
+                <div className="p-3 rounded-lg bg-[#00a884]/10 border border-[#00a884]/30 text-[#00a884] space-y-1">
+                  <div className="flex items-center gap-1.5 font-semibold text-white">
+                    <Check className="w-4 h-4 text-[#00a884]" />
+                    <span>Notifications Active</span>
+                  </div>
+                  <p className="text-[11px] text-[#8696a0]">
+                    This device is registered to receive lock-screen alerts for @{userHandle}.
+                  </p>
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    onClick={handleTestAlert}
+                    disabled={loading}
+                    className="w-full py-2 px-3 rounded-lg bg-[#00a884] hover:bg-[#008f6f] text-slate-950 font-semibold text-xs flex items-center justify-center gap-2 transition"
+                  >
+                    {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                    <span>{testSent ? 'Alert Dispatched to Phone!' : 'Send Test Notification to This Phone'}</span>
+                  </button>
+                  <p className="text-[10px] text-center text-[#8696a0] mt-1.5">
+                    Tip: Tap this, then quickly lock your phone or switch apps to see the notification!
+                  </p>
+                </div>
+              </div>
             ) : errorMsg ? (
               <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-300 space-y-1">
                 <div className="flex items-center gap-1.5 font-semibold">
@@ -122,7 +169,7 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
                 <p className="text-[11px] text-rose-200/80">{errorMsg}</p>
                 {permission === 'denied' && (
                   <p className="text-[11px] text-[#8696a0] pt-1">
-                    Notifications are blocked in your browser settings. Click the tune/padlock icon next to the URL in your address bar to re-allow notifications.
+                    Notifications are blocked in your browser/iOS settings. Check iPhone Settings &gt; Safari &gt; Notifications or Settings &gt; Chatze.
                   </p>
                 )}
               </div>
@@ -133,7 +180,7 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
                 </p>
                 <div className="flex items-center gap-2 p-2 rounded-lg bg-[#202c33] text-white text-[11px]">
                   <Check className="w-4 h-4 text-[#00a884] shrink-0" />
-                  <span>Zero battery drain (uses native OS push service)</span>
+                  <span>Zero battery drain (uses native Apple APNs / Google FCM)</span>
                 </div>
               </div>
             )}
@@ -146,6 +193,15 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
             >
               Close
             </button>
+            {isSubscribed && (
+              <button
+                onClick={handleUnsubscribe}
+                disabled={loading}
+                className="py-2 px-3 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-medium transition"
+              >
+                Turn Off
+              </button>
+            )}
             {!isIos && !isSubscribed && (
               <button
                 onClick={() => {
@@ -170,7 +226,7 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
         disabled={loading}
         title={
           isSubscribed
-            ? 'Background notifications active (click to mute)'
+            ? 'Background notifications active (click to test or configure)'
             : 'Enable background notifications for this device'
         }
         className={`relative p-2 rounded-full transition-colors ${
