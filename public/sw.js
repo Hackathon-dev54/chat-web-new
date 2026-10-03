@@ -102,42 +102,56 @@ self.addEventListener('fetch', (event) => {
 
 // Push Notifications handler
 self.addEventListener('push', (event) => {
-  let data = { title: 'New message', body: 'You received a new message.', url: '/', conversationId: undefined }
+  let title = 'Chatze'
+  let body = 'You received a new message.'
+  let url = '/'
+  let conversationId = undefined
+
   try {
     if (event.data) {
-      data = { ...data, ...event.data.json() }
+      const data = event.data.json()
+      if (data.title) title = data.title
+      if (data.body) body = data.body
+      if (data.url) url = data.url
+      if (data.conversationId) conversationId = data.conversationId
     }
-  } catch {
-    /* Ignore parse error */
+  } catch (err) {
+    try {
+      if (event.data) {
+        body = event.data.text() || body
+      }
+    } catch {}
   }
 
+  // iOS WebKit notification options
   const notificationOptions = {
-    body: data.body,
+    body,
     icon: '/pwa-192x192.png',
-    badge: '/icon.svg',
-    vibrate: [100, 50, 100],
     data: {
-      url: data.url || '/',
-      conversationId: data.conversationId,
+      url: url || '/',
+      conversationId,
     },
-    tag: data.conversationId ? `conv_${data.conversationId}` : 'chatze_chat',
-    renotify: true,
   }
 
   event.waitUntil(
-    Promise.all([
-      self.registration.showNotification(data.title || 'Chatze', notificationOptions),
-      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-        clients.forEach((client) => {
-          client.postMessage({
-            type: 'relay:message',
-            conversationId: data.conversationId,
-            title: data.title,
-            body: data.body,
+    self.registration
+      .showNotification(title, notificationOptions)
+      .catch((err) => {
+        console.warn('[SW showNotification error]', err)
+        return self.registration.showNotification(title, { body })
+      })
+      .then(() => {
+        return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+          clients.forEach((client) => {
+            client.postMessage({
+              type: 'relay:message',
+              conversationId,
+              title,
+              body,
+            })
           })
         })
-      }),
-    ])
+      })
   )
 })
 

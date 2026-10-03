@@ -1096,19 +1096,18 @@ app.post('/api/messaging', async (c) => {
     await broadcastAllStreams('new_message', messageRecord, c.env)
 
     // Web Push background dispatch (asynchronous, 0ms latency to SSE)
-    const recipientToNotify = cleanRemoteHandle || (conv?.user_a === actualSender ? conv?.user_b : conv?.user_a) || cleanSenderHandle
-    if (recipientToNotify) {
-      const pushNotification = {
-        title: `@${cleanSenderHandle || 'User'}`,
-        body: messageRecord.body,
-        conversationId: messageRecord.conversationId,
-        url: `/?conv=${messageRecord.conversationId}`,
-      }
-      if ((c as any).executionCtx?.waitUntil) {
-        ;(c as any).executionCtx.waitUntil(sendPushNotification(c.env, recipientToNotify, pushNotification))
-      } else {
-        sendPushNotification(c.env, recipientToNotify, pushNotification).catch(() => {})
-      }
+    const recipientToNotify = cleanRemoteHandle || (conv?.user_a === actualSender ? conv?.user_b : conv?.user_a) || null
+    const pushNotification = {
+      title: `@${cleanSenderHandle || 'User'}`,
+      body: messageRecord.body,
+      conversationId: messageRecord.conversationId,
+      url: `/?conv=${messageRecord.conversationId}`,
+    }
+    const pushPromise = sendPushNotification(c.env, recipientToNotify, pushNotification)
+    if ((c as any).executionCtx?.waitUntil) {
+      ;(c as any).executionCtx.waitUntil(pushPromise)
+    } else {
+      pushPromise.catch(() => {})
     }
 
     const targetUrl = remoteInstanceUrl || memoryStore.conversations.get(conversationId)?.remote_instance_url
@@ -1199,18 +1198,17 @@ app.post('/api/federation/v1/messages', async (c) => {
     await broadcastAllStreams('new_message', messageRecord, c.env)
 
     // Web Push background alert for inbound peer message (asynchronous, never blocks HTTP response)
-    if (adminHandle) {
-      const pushNotification = {
-        title: `@${cleanSender}`,
-        body: messageRecord.body,
-        conversationId: messageRecord.conversationId,
-        url: `/?conv=${messageRecord.conversationId}`,
-      }
-      if ((c as any).executionCtx?.waitUntil) {
-        ;(c as any).executionCtx.waitUntil(sendPushNotification(c.env, adminHandle, pushNotification))
-      } else {
-        sendPushNotification(c.env, adminHandle, pushNotification).catch(() => {})
-      }
+    const pushNotification = {
+      title: `@${cleanSender}`,
+      body: messageRecord.body,
+      conversationId: messageRecord.conversationId,
+      url: `/?conv=${messageRecord.conversationId}`,
+    }
+    const pushPromise = sendPushNotification(c.env, null, pushNotification)
+    if ((c as any).executionCtx?.waitUntil) {
+      ;(c as any).executionCtx.waitUntil(pushPromise)
+    } else {
+      pushPromise.catch(() => {})
     }
 
     return c.json({ success: true, id: messageId }, 201)
@@ -1496,16 +1494,60 @@ app.post('/api/push/unsubscribe', async (c) => {
 
 app.post('/api/push/test', async (c) => {
   try {
-    const { userHandle } = await c.req.json()
-    const cleanHandle = (userHandle || 'admin').replace(/^@/, '').trim().toLowerCase()
-
-    await sendPushNotification(c.env, cleanHandle, {
+    const { userHandle } = await c.req.json().catch(() => ({}))
+    const summary = await sendPushNotification(c.env, userHandle || null, {
       title: 'Chatze Notification Test',
       body: '🎉 Notifications working on your device! You will receive alerts when new messages arrive.',
       url: '/',
     })
 
-    return c.json({ success: true, message: 'Test notification dispatched' })
+    return c.json({
+      success: summary.successful > 0 || summary.dispatched > 0,
+      dispatched: summary.dispatched,
+      successful: summary.successful,
+      results: summary.results,
+    })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400)
+  }
+})
+
+app.get('/api/push/status', async (c) => {
+  try {
+    const db = c.env?.DB
+    let subs: any[] = []
+    if (db) {
+      try {
+        const { results } = await db
+          .prepare('SELECT id, user_handle, endpoint, user_agent, created_at FROM push_subscriptions')
+          .all()
+        if (Array.isArray(results)) subs = results
+      } catch {}
+    }
+    if (subs.length === 0) {
+      subs = Array.from(memoryPushSubscriptions.values()).map((s) => ({
+        id: s.id,
+        user_handle: s.user_handle,
+        endpoint: s.endpoint,
+        user_agent: s.user_agent,
+        created_at: s.created_at,
+      }))
+    }
+    return c.json({
+      activeSubscriptions: subs.length,
+      subscriptions: subs.map((s) => {
+        let domain = 'unknown'
+        try {
+          domain = new URL(s.endpoint).hostname
+        } catch {}
+        return {
+          id: s.id,
+          user_handle: s.user_handle,
+          gateway: domain,
+          created_at: s.created_at,
+        }
+      }),
+    })
   } catch (err: any) {
     return c.json({ error: err.message }, 400)
   }
