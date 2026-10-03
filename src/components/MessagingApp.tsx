@@ -35,6 +35,7 @@ import {
   setLocalMeta,
 } from '../lib/db'
 import { PWAInstallButton } from './PWAInstallButton'
+import { NotificationToggle } from './NotificationToggle'
 import { OfflineIndicator } from './OfflineIndicator'
 
 
@@ -49,8 +50,22 @@ export function getOptimizedImageUrl(rawUrl: string, width = 800): string {
   // If already routed through wsrv.nl, return as is
   if (rawUrl.includes('wsrv.nl')) return rawUrl
 
-  const cleanUrl = rawUrl.startsWith('//') ? 'https:' + rawUrl : rawUrl
-  return `https://wsrv.nl/?url=${encodeURIComponent(cleanUrl)}&w=${width}&output=webp&q=80`
+  let fullUrl = rawUrl
+  if (fullUrl.startsWith('/')) {
+    if (typeof window !== 'undefined') {
+      fullUrl = window.location.origin + fullUrl
+    }
+  } else if (fullUrl.startsWith('//')) {
+    fullUrl = 'https:' + fullUrl
+  }
+
+  // Bypass wsrv.nl for local development hosts that external proxy cannot access
+  if (fullUrl.includes('localhost') || fullUrl.includes('127.0.0.1')) {
+    return fullUrl
+  }
+
+  // Route through wsrv.nl with WebP conversion, dimension resize, auto-EXIF rotation (&af=true), and progressive display (&il=true)
+  return `https://wsrv.nl/?url=${encodeURIComponent(fullUrl)}&w=${width}&output=webp&q=80&af=true&il=true`
 }
 
 interface ParsedMessage {
@@ -88,8 +103,13 @@ export function parseMessageContent(body: string): ParsedMessage {
   return { isImage: false, text: body }
 }
 
-// Client-side HTML5 canvas compression before sending to Cloudflare
-export async function compressImageToWebP(file: File, maxDim = 900, quality = 0.75): Promise<{ dataUrl: string; sizeKb: number }> {
+// Client-side HTML5 canvas compression before sending to Cloudflare (Saves 90-95% D1 DB storage!)
+export async function compressImageToWebP(
+  file: File,
+  maxDim = 850,
+  quality = 0.72
+): Promise<{ dataUrl: string; sizeKb: number; originalKb: number }> {
+  const originalKb = Math.round(file.size / 1024)
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = (e) => {
@@ -112,9 +132,17 @@ export async function compressImageToWebP(file: File, maxDim = 900, quality = 0.
         const ctx = canvas.getContext('2d')
         if (!ctx) return reject(new Error('Canvas context not available'))
         ctx.drawImage(img, 0, 0, width, height)
-        const dataUrl = canvas.toDataURL('image/webp', quality)
-        const sizeKb = Math.round((dataUrl.length * (3 / 4)) / 1024)
-        resolve({ dataUrl, sizeKb })
+
+        let dataUrl = canvas.toDataURL('image/webp', quality)
+        let sizeKb = Math.round((dataUrl.length * (3 / 4)) / 1024)
+
+        // Adaptive second pass: If photo is still > 140KB (heavy detail), apply slightly more compression to protect D1
+        if (sizeKb > 140) {
+          dataUrl = canvas.toDataURL('image/webp', 0.60)
+          sizeKb = Math.round((dataUrl.length * (3 / 4)) / 1024)
+        }
+
+        resolve({ dataUrl, sizeKb, originalKb })
       }
       img.onerror = reject
       img.src = e.target?.result as string
@@ -200,7 +228,7 @@ export function MessagingApp({
   const [showQrModal, setShowQrModal] = useState(false)
 
   // Media attachments & wsrv.nl proxy state
-  const [selectedImageFile, setSelectedImageFile] = useState<{ dataUrl: string; caption: string; sizeKb: number } | null>(null)
+  const [selectedImageFile, setSelectedImageFile] = useState<{ dataUrl: string; caption: string; sizeKb: number; originalKb?: number } | null>(null)
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -215,8 +243,8 @@ export function MessagingApp({
     if (!file) return
     e.target.value = ''
     try {
-      const { dataUrl, sizeKb } = await compressImageToWebP(file)
-      setSelectedImageFile({ dataUrl, caption: '', sizeKb })
+      const { dataUrl, sizeKb, originalKb } = await compressImageToWebP(file)
+      setSelectedImageFile({ dataUrl, caption: '', sizeKb, originalKb })
     } catch (err) {
       console.error('Image compression error', err)
       alert('Failed to process image. Please try a different photo.')
@@ -232,8 +260,8 @@ export function MessagingApp({
         if (file) {
           e.preventDefault()
           try {
-            const { dataUrl, sizeKb } = await compressImageToWebP(file)
-            setSelectedImageFile({ dataUrl, caption: '', sizeKb })
+            const { dataUrl, sizeKb, originalKb } = await compressImageToWebP(file)
+            setSelectedImageFile({ dataUrl, caption: '', sizeKb, originalKb })
           } catch (err) {
             console.error('Clipboard image error', err)
           }
@@ -955,6 +983,7 @@ export function MessagingApp({
             </div>
 
             <div className="flex items-center gap-1">
+              <NotificationToggle />
               <PWAInstallButton className="hidden sm:inline-flex" />
               <button
                 onClick={() => setShowIdentityModal(true)}
@@ -1165,6 +1194,7 @@ export function MessagingApp({
               </div>
 
               <div className="flex items-center gap-2 text-xs text-[#8696a0] shrink-0">
+                <NotificationToggle />
                 <PWAInstallButton />
                 <span className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1 rounded-full bg-[#111b21] border border-[#202c33] text-[10px] sm:text-[11px]">
                   <span className={`w-2 h-2 rounded-full ${streamConnected ? 'bg-[#00a884]' : 'bg-amber-400 animate-ping'}`} />
@@ -1565,8 +1595,13 @@ export function MessagingApp({
                 alt="Upload preview"
                 className="w-full h-auto max-h-[300px] sm:max-h-[360px] object-contain rounded-xl"
               />
-              <span className="absolute bottom-2 right-2 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-sm text-[10px] text-[#00a884] font-mono">
-                ~{selectedImageFile.sizeKb} KB (Edge Optimized)
+              <span className="absolute bottom-2 right-2 px-2.5 py-1 rounded-full bg-black/75 backdrop-blur-md text-[10px] text-[#00a884] font-mono border border-[#00a884]/30 shadow-lg">
+                ~{selectedImageFile.sizeKb} KB
+                {selectedImageFile.originalKb && selectedImageFile.originalKb > selectedImageFile.sizeKb ? (
+                  <span className="text-white/80 ml-1">
+                    (from {selectedImageFile.originalKb} KB, {Math.round((1 - selectedImageFile.sizeKb / selectedImageFile.originalKb) * 100)}% saved)
+                  </span>
+                ) : ' (Edge Optimized)'}
               </span>
             </div>
 
@@ -1579,8 +1614,9 @@ export function MessagingApp({
                 placeholder="Add a caption... (optional)"
                 className="w-full px-3.5 py-2.5 bg-[#202c33] border border-[#222e35] rounded-xl text-xs sm:text-sm text-[#e9edef] placeholder-[#8696a0] focus:outline-none focus:border-[#00a884]"
               />
-              <p className="text-[10px] text-[#8696a0] px-1">
-                Optimized & cached globally via <strong>wsrv.nl</strong> with zero Cloudflare egress charges.
+              <p className="text-[10px] text-[#8696a0] px-1 flex items-center justify-between">
+                <span>Auto-converted to lightweight WebP for D1 database storage.</span>
+                <span className="text-[#00a884] font-medium">Cached via wsrv.nl</span>
               </p>
             </div>
 
