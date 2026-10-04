@@ -22,6 +22,7 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
   const [loading, setLoading] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [testSent, setTestSent] = useState(false)
+  const [testDetails, setTestDetails] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [permission, setPermission] = useState<NotificationPermission | 'unsupported'>('default')
 
@@ -33,13 +34,36 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
 
     setPermission(Notification.permission)
 
-    getExistingPushSubscription().then((sub) => {
-      setIsSubscribed(!!sub)
+    getExistingPushSubscription().then(async (sub) => {
+      if (sub) {
+        setIsSubscribed(true)
+        // Background sync: ensure this device's token is saved in server D1 database
+        try {
+          const subJson = sub.toJSON()
+          if (subJson.endpoint && subJson.keys?.p256dh && subJson.keys?.auth) {
+            await fetch('/api/push/subscribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                endpoint: subJson.endpoint,
+                keys: subJson.keys,
+                userHandle: (userHandle || 'admin').replace(/^@/, '').trim().toLowerCase(),
+                userAgent: navigator.userAgent.slice(0, 100),
+              }),
+            })
+          }
+        } catch (e) {
+          console.warn('[Push Auto-sync Warning]', e)
+        }
+      } else {
+        setIsSubscribed(false)
+      }
     })
-  }, [])
+  }, [userHandle])
 
   const handleToggle = async () => {
     setErrorMsg(null)
+    setTestDetails(null)
 
     if (isIosWithoutPwa()) {
       setShowModal(true)
@@ -59,7 +83,7 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
     if (result.success) {
       setIsSubscribed(true)
       setPermission('granted')
-      setShowModal(true) // Show confirmation and test button
+      setShowModal(true)
     } else {
       setErrorMsg(result.error || 'Could not enable notifications')
       setShowModal(true)
@@ -78,11 +102,31 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
 
   const handleTestAlert = async () => {
     setLoading(true)
-    const res = await sendTestNotification(userHandle)
+    setErrorMsg(null)
+    setTestDetails(null)
+
+    // First attempt: send test notification
+    let res = await sendTestNotification(userHandle)
+
+    // If server has no device registered (e.g. database migration or isolate reboot),
+    // automatically re-register this device immediately and retry!
+    if (!res.success && (res.dispatched === 0 || res.error?.includes('No active device') || res.error?.includes('not found'))) {
+      const regRes = await subscribeToPushNotifications(userHandle)
+      if (regRes.success) {
+        setIsSubscribed(true)
+        res = await sendTestNotification(userHandle)
+      } else {
+        setErrorMsg(regRes.error || 'Failed to re-register this device with server.')
+        setLoading(false)
+        return
+      }
+    }
+
     setLoading(false)
     if (res.success) {
       setTestSent(true)
-      setTimeout(() => setTestSent(false), 5000)
+      setTestDetails(res.details || 'Dispatched to 1 device')
+      setTimeout(() => setTestSent(false), 8000)
     } else {
       setErrorMsg(res.error || 'Could not send test notification')
     }
@@ -146,17 +190,54 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
                   </p>
                 </div>
 
-                <div className="pt-1">
+                <div className="pt-1 space-y-2">
                   <button
                     onClick={handleTestAlert}
                     disabled={loading}
-                    className="w-full py-2 px-3 rounded-lg bg-[#00a884] hover:bg-[#008f6f] text-slate-950 font-semibold text-xs flex items-center justify-center gap-2 transition"
+                    className="w-full py-2.5 px-3 rounded-lg bg-[#00a884] hover:bg-[#008f6f] text-slate-950 font-semibold text-xs flex items-center justify-center gap-2 transition"
                   >
-                    {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
                     <span>{testSent ? 'Alert Dispatched to Phone!' : 'Send Test Notification to This Phone'}</span>
                   </button>
-                  <p className="text-[10px] text-center text-[#8696a0] mt-1.5">
-                    Tip: Tap this, then quickly lock your phone or switch apps to see the notification!
+
+                  {testSent && (
+                    <div className="p-2.5 rounded-lg bg-[#00a884]/20 border border-[#00a884]/40 text-[#00a884] text-center animate-in fade-in space-y-1">
+                      <p className="font-semibold text-white">🎉 Test Notification Sent!</p>
+                      <p className="text-[11px] text-emerald-200">
+                        {testDetails || 'Delivered to gateway.'} Lock your phone screen or swipe away to see the banner!
+                      </p>
+                    </div>
+                  )}
+
+                  {errorMsg && (
+                    <div className="p-2.5 rounded-lg bg-rose-500/20 border border-rose-500/40 text-rose-300 text-center animate-in fade-in space-y-1.5">
+                      <p className="font-semibold text-white flex items-center justify-center gap-1">
+                        <AlertCircle className="w-4 h-4 text-rose-400" />
+                        <span>Push Notification Issue</span>
+                      </p>
+                      <p className="text-[11px] text-rose-200">{errorMsg}</p>
+                      <button
+                        onClick={async () => {
+                          setLoading(true)
+                          setErrorMsg(null)
+                          const res = await subscribeToPushNotifications(userHandle)
+                          setLoading(false)
+                          if (res.success) {
+                            setIsSubscribed(true)
+                            handleTestAlert()
+                          } else {
+                            setErrorMsg(res.error || 'Re-registration failed')
+                          }
+                        }}
+                        className="text-[10px] text-white underline hover:no-underline font-medium block mx-auto pt-1"
+                      >
+                        Tap here to re-register this device
+                      </button>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-center text-[#8696a0]">
+                    Tip: Tap this button, then quickly lock your phone to see the notification banner on your lock screen!
                   </p>
                 </div>
               </div>
@@ -169,7 +250,7 @@ export const NotificationToggleButton: React.FC<NotificationToggleButtonProps> =
                 <p className="text-[11px] text-rose-200/80">{errorMsg}</p>
                 {permission === 'denied' && (
                   <p className="text-[11px] text-[#8696a0] pt-1">
-                    Notifications are blocked in your browser/iOS settings. Check iPhone Settings &gt; Safari &gt; Notifications or Settings &gt; Chatze.
+                    Notifications are blocked in your browser settings. Check Android Settings &gt; Apps &gt; Chrome &gt; Notifications or Site Settings.
                   </p>
                 )}
               </div>

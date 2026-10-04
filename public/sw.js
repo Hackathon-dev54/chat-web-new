@@ -123,10 +123,14 @@ self.addEventListener('push', (event) => {
     } catch {}
   }
 
-  // iOS WebKit notification options
+  // Multi-platform notification options (Android Chrome & iOS Safari WebKit)
   const notificationOptions = {
     body,
     icon: '/pwa-192x192.png',
+    badge: '/icon-light-32x32.png',
+    vibrate: [200, 100, 200],
+    tag: conversationId ? `conv_${conversationId}` : `alert_${Date.now()}`,
+    renotify: true,
     data: {
       url: url || '/',
       conversationId,
@@ -138,6 +142,7 @@ self.addEventListener('push', (event) => {
       .showNotification(title, notificationOptions)
       .catch((err) => {
         console.warn('[SW showNotification error]', err)
+        // Fallback with bare minimum for strict iOS Safari
         return self.registration.showNotification(title, { body })
       })
       .then(() => {

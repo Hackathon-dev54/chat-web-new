@@ -63,11 +63,23 @@ export const NotificationPermissionBanner: React.FC<NotificationPermissionBanner
 
   const handleSendTest = async () => {
     setLoading(true)
-    const res = await sendTestNotification(userHandle)
+    setErrorMsg(null)
+    let res = await sendTestNotification(userHandle)
+    if (!res.success && (res.dispatched === 0 || res.error?.includes('No active device') || res.error?.includes('not found'))) {
+      const regRes = await subscribeToPushNotifications(userHandle)
+      if (regRes.success) {
+        setIsSubscribed(true)
+        res = await sendTestNotification(userHandle)
+      } else {
+        setErrorMsg(regRes.error || 'Failed to re-register this device with server.')
+        setLoading(false)
+        return
+      }
+    }
     setLoading(false)
     if (res.success) {
       setTestSent(true)
-      setTimeout(() => setTestSent(false), 5000)
+      setTimeout(() => setTestSent(false), 8000)
     } else {
       setErrorMsg(res.error || 'Test notification failed.')
     }
