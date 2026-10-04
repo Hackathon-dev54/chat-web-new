@@ -1,10 +1,10 @@
 import { buildPushPayload } from '@block65/webcrypto-web-push'
 
-// Permanent zero-setup fallback VAPID keypair (P-256)
+// Permanent zero-setup fallback VAPID keypair (Pure WebCrypto P-256 verified)
 // Can be overridden anytime via Cloudflare Worker environment variables:
 // VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT
-export const DEFAULT_VAPID_PUBLIC_KEY = 'BJnY0CoLcsFvReeBAmBfdP9K-KIu4fROfOtcxsjEomm7yJnoIbLm-ukx7iHJabuwMUE2CcbptDsVV53BZ5YjYJQ'
-export const DEFAULT_VAPID_PRIVATE_KEY = 'FpbM_gTPI8cDU_olIxHGpOnRk4MhrFSNu-GEUCo8Gw0'
+export const DEFAULT_VAPID_PUBLIC_KEY = 'BAV9SIwwOf2vhDMwhjs0H9To0hiJvc-BDRl1E3ZxV4p35Ykdw74vCo_Bpp1GfRAEnG2oQyD8vqH_dVywN0QHXZM'
+export const DEFAULT_VAPID_PRIVATE_KEY = 'FzqTh8OqvMz91eyBVnx6jEiY_EX_OIMThvrL4ulp4pQ'
 export const DEFAULT_VAPID_SUBJECT = 'mailto:support@chatze.app'
 
 export interface PushNotificationPayload {
