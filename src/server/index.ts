@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
 import {
   getVapidKeys,
+  getOrGenerateVapidKeys,
   sendPushNotification,
   memoryPushSubscriptions,
   StoredSubscription,
@@ -1419,8 +1420,8 @@ app.get('/api/health', (c) =>
 // ============================================================================
 // 12.5 Web Push Notification Subscriptions API (Zero-Polling Background Alerts)
 // ============================================================================
-app.get('/api/push/vapid-public-key', (c) => {
-  const vapid = getVapidKeys(c.env)
+app.get('/api/push/vapid-public-key', async (c) => {
+  const vapid = await getOrGenerateVapidKeys(c.env)
   return c.json({ publicKey: vapid.publicKey })
 })
 

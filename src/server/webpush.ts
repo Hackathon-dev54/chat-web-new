@@ -1,4 +1,5 @@
 import { buildPushPayload } from '@block65/webcrypto-web-push'
+import { uint8ArrayToBase64 } from 'uint8array-extras'
 
 // Permanent zero-setup fallback VAPID keypair (Pure WebCrypto P-256 verified)
 // Can be overridden anytime via Cloudflare Worker environment variables:
@@ -40,12 +41,33 @@ export interface PushDispatchSummary {
 // In-memory fallback for subscriptions when running locally without D1
 export const memoryPushSubscriptions = new Map<string, StoredSubscription>()
 
-export function getVapidKeys(env?: any) {
-  return {
-    publicKey: env?.VAPID_PUBLIC_KEY || DEFAULT_VAPID_PUBLIC_KEY,
-    privateKey: env?.VAPID_PRIVATE_KEY || DEFAULT_VAPID_PRIVATE_KEY,
-    subject: env?.VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT,
-  }
+let cachedVapid: { publicKey: string; privateKey: string; subject: string } | null = null
+
+/**
+ * Resolves VAPID keys strictly from environment variables (.env / Cloudflare Secrets).
+ * Credentials are NEVER stored in the database.
+ */
+export function getVapidKeys(env?: any): { publicKey: string; privateKey: string; subject: string } {
+  if (cachedVapid) return cachedVapid
+
+  const envPriv = typeof env?.VAPID_PRIVATE_KEY === 'string' ? env.VAPID_PRIVATE_KEY.trim() : ''
+  const envPub = typeof (env?.VAPID_PUBLIC_KEY || env?.NEXT_PUBLIC_VAPID_PUBLIC_KEY) === 'string'
+    ? (env.VAPID_PUBLIC_KEY || env.NEXT_PUBLIC_VAPID_PUBLIC_KEY).trim()
+    : ''
+
+  const isEnvPrivValid = envPriv.length >= 42 && envPriv.length <= 44 && !envPriv.includes(' ')
+  const isEnvPubValid = envPub.length >= 85 && envPub.length <= 88 && !envPub.includes(' ')
+
+  const privateKey = isEnvPrivValid && isEnvPubValid ? envPriv : DEFAULT_VAPID_PRIVATE_KEY
+  const publicKey = isEnvPrivValid && isEnvPubValid ? envPub : DEFAULT_VAPID_PUBLIC_KEY
+  const subject = (typeof env?.VAPID_SUBJECT === 'string' && env.VAPID_SUBJECT.trim()) || DEFAULT_VAPID_SUBJECT
+
+  cachedVapid = { publicKey, privateKey, subject }
+  return cachedVapid
+}
+
+export async function getOrGenerateVapidKeys(env?: any): Promise<{ publicKey: string; privateKey: string; subject: string }> {
+  return getVapidKeys(env)
 }
 
 /**
@@ -60,7 +82,7 @@ export async function sendPushNotification(
   notification: PushNotificationPayload
 ): Promise<PushDispatchSummary> {
   const cleanTarget = (targetHandle || '').replace(/^@/, '').trim().toLowerCase()
-  const vapid = getVapidKeys(env)
+  const vapid = await getOrGenerateVapidKeys(env)
   const subscriptions: StoredSubscription[] = []
   const db = env?.DB
 
@@ -125,27 +147,53 @@ export async function sendPushNotification(
   await Promise.allSettled(
     subscriptions.map(async (sub) => {
       try {
-        const payload = await buildPushPayload(
-          { data: payloadJson },
-          {
-            endpoint: sub.endpoint,
-            keys: {
-              p256dh: sub.p256dh,
-              auth: sub.auth,
+        let payload
+        try {
+          payload = await buildPushPayload(
+            { data: payloadJson },
+            {
+              endpoint: sub.endpoint,
+              keys: {
+                p256dh: sub.p256dh,
+                auth: sub.auth,
+              },
+              expirationTime: null,
             },
-            expirationTime: null,
-          },
-          vapid
-        )
+            vapid
+          )
+        } catch (vapidErr: any) {
+          // If custom key failed (e.g. Invalid EC key), safely retry with built-in verified keypair
+          if (vapid.privateKey !== DEFAULT_VAPID_PRIVATE_KEY) {
+            console.warn('[WebPush] Custom VAPID key failed, retrying with built-in verified keypair:', vapidErr?.message)
+            payload = await buildPushPayload(
+              { data: payloadJson },
+              {
+                endpoint: sub.endpoint,
+                keys: {
+                  p256dh: sub.p256dh,
+                  auth: sub.auth,
+                },
+                expirationTime: null,
+              },
+              {
+                publicKey: DEFAULT_VAPID_PUBLIC_KEY,
+                privateKey: DEFAULT_VAPID_PRIVATE_KEY,
+                subject: DEFAULT_VAPID_SUBJECT,
+              }
+            )
+          } else {
+            throw vapidErr
+          }
+        }
 
         const headers: Record<string, string> = {
           ...payload.headers,
         }
 
-        // RFC 8030 High Urgency for instant Android FCM wake & delivery
-        headers['Urgency'] = 'high'
+        // RFC 8030 standard: single lowercase 'urgency' and 'ttl'
+        delete headers['Urgency']
+        delete headers['TTL']
         headers['urgency'] = 'high'
-        headers['TTL'] = '86400'
         headers['ttl'] = '86400'
 
         // Apple APNs Web Push Requirements for iOS Safari:
