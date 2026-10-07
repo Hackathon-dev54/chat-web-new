@@ -2,12 +2,19 @@ import React, { useState, useEffect } from 'react'
 import { SetupWizard } from './components/SetupWizard'
 import { AuthScreens } from './components/AuthScreens'
 import { MessagingApp } from './components/MessagingApp'
+import { CustomerInquiryPage } from './components/CustomerInquiryPage'
 
 export function App() {
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null)
   const [displayName, setDisplayName] = useState('Chatze User')
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [forceLogin, setForceLogin] = useState(false)
+
+  const isShopVisitor = !forceLogin && typeof window !== 'undefined' && (
+    window.location.pathname.startsWith('/shop') ||
+    new URLSearchParams(window.location.search).has('shop')
+  )
 
   useEffect(() => {
     async function checkState() {
@@ -81,6 +88,15 @@ export function App() {
         <div className="w-8 h-8 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin"></div>
         <p className="text-xs font-medium tracking-wide">Connecting to Edge Cloud...</p>
       </div>
+    )
+  }
+
+  // Public Customer View for Shop Links
+  if (isShopVisitor) {
+    return (
+      <CustomerInquiryPage
+        onSwitchToOwnerLogin={() => setForceLogin(true)}
+      />
     )
   }
 

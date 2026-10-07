@@ -22,6 +22,8 @@ import {
   Download,
   Maximize2,
   Loader2,
+  Settings,
+  Store,
 } from 'lucide-react'
 import {
   getLocalMessages,
@@ -38,6 +40,7 @@ import { PWAInstallButton } from './PWAInstallButton'
 import { NotificationToggleButton } from './NotificationToggleButton'
 import { NotificationPermissionBanner } from './NotificationPermissionBanner'
 import { OfflineIndicator } from './OfflineIndicator'
+import { ProfileSettingsModal } from './ProfileSettingsModal'
 
 
 // ============================================================================
@@ -206,12 +209,19 @@ export function MessagingApp({
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputText, setInputText] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [inboxFilter, setInboxFilter] = useState<'all' | 'unread' | 'pending'>('all')
+  const [inboxFilter, setInboxFilter] = useState<'all' | 'unread' | 'pending' | 'inquiries'>('all')
+  const [accountType, setAccountType] = useState<'personal' | 'business'>('personal')
+  const [inquiries, setInquiries] = useState<any[]>([])
+  const [pendingInquiryCount, setPendingInquiryCount] = useState<number>(0)
+  const [friendPinInput, setFriendPinInput] = useState('')
+  const [replyingInquiryId, setReplyingInquiryId] = useState<string | null>(null)
 
   // Federation & Contacts
   const [friendships, setFriendships] = useState<Friendship[]>([])
   const [showAddFriendModal, setShowAddFriendModal] = useState(false)
   const [showIdentityModal, setShowIdentityModal] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [currentDisplayName, setCurrentDisplayName] = useState(businessName || currentUser.display_name)
   const [copiedLink, setCopiedLink] = useState(false)
 
   // Add friend state
@@ -680,6 +690,14 @@ export function MessagingApp({
         }
       })
 
+      evtSource.addEventListener('new_customer_inquiry', () => {
+        fetchInquiries()
+      })
+
+      evtSource.addEventListener('inquiry_status_updated', () => {
+        fetchInquiries()
+      })
+
       evtSource.onerror = () => {
         setStreamConnected(false)
         if (!reconnectTimeout) {
@@ -760,6 +778,36 @@ export function MessagingApp({
     }
   }, [currentUser.id])
 
+  // Profile, Mode & URL Handshake Initialization
+  useEffect(() => {
+    fetch('/api/profile')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.profile) {
+          setAccountType(data.profile.accountType || 'personal')
+          if (data.profile.accountType === 'business') {
+            fetchInquiries()
+          }
+        }
+      })
+      .catch(() => {})
+
+    // Check URL params for QR or direct link handshake: ?add=@user&pin=NP-XXXX
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search)
+      const addParam = params.get('add')
+      const pinParam = params.get('pin')
+      if (addParam) {
+        setFriendHandle(addParam.replace(/^@/, ''))
+        if (pinParam) setFriendPinInput(pinParam)
+        setShowAddFriendModal(true)
+      }
+      if (params.get('tab') === 'inquiries') {
+        setInboxFilter('inquiries')
+      }
+    }
+  }, [])
+
   // Send Contact Connection Request (Single POST request)
   const handleSendFriendRequest = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -779,12 +827,14 @@ export function MessagingApp({
           myHandle: currentUser.handle,
           myDisplayName: currentUser.display_name,
           myInstanceUrl: window.location.origin,
+          pin: friendPinInput.trim() || undefined,
         }),
       })
       const data = await res.json()
       if (res.ok && data.success) {
         setFriendHandle('')
         setFriendDomain('')
+        setFriendPinInput('')
         setShowAddFriendModal(false)
 
         if (data.friendship) {
@@ -856,8 +906,8 @@ export function MessagingApp({
     }
   }
 
-  // Decline Inbound Request (Single POST request)
-  const handleRejectFriendRequest = async (remoteHandle: string) => {
+  // Decline Inbound Request (With optional Root Domain Blacklist)
+  const handleRejectFriendRequest = async (remoteHandle: string, blockDomain = false, remoteInstanceUrl = '') => {
     try {
       setFriendships((prev) => {
         const updated = prev.filter((f) => f.remote_handle !== remoteHandle)
@@ -873,11 +923,59 @@ export function MessagingApp({
       await fetch('/api/federation/requests/reject', {
         method: 'POST',
         headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ remoteHandle }),
+        body: JSON.stringify({ remoteHandle, blockDomain, remoteInstanceUrl }),
       })
     } catch (err) {
       console.error('Reject error', err)
     }
+  }
+
+  // Customer Inquiries Letterbox API Helpers
+  const fetchInquiries = async () => {
+    try {
+      const res = await fetch('/api/inquiries')
+      if (res.ok) {
+        const data = await res.json()
+        setInquiries(data.inquiries || [])
+        setPendingInquiryCount(data.pendingCount || 0)
+      }
+    } catch {}
+  }
+
+  const handleReplyInquiry = async (inquiryId: string) => {
+    setReplyingInquiryId(inquiryId)
+    try {
+      const res = await fetch('/api/inquiries/reply', {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ inquiryId }),
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        await fetchInquiries()
+        runSync()
+        setInboxFilter('all')
+      } else {
+        alert(data.error || 'Failed to reply to inquiry')
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Network error while opening chat')
+    } finally {
+      setReplyingInquiryId(null)
+    }
+  }
+
+  const handleDismissInquiry = async (inquiryId: string, blockDomain = false) => {
+    try {
+      const res = await fetch('/api/inquiries/dismiss', {
+        method: 'POST',
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ inquiryId, blockDomain }),
+      })
+      if (res.ok) {
+        await fetchInquiries()
+      }
+    } catch {}
   }
 
   // Send Message (0ms Optimistic + Single POST request, ZERO GET requests!)
@@ -970,13 +1068,17 @@ export function MessagingApp({
         {/* Header Bar */}
         <div className="p-3.5 border-b border-[#202c33] space-y-3 bg-[#202c33]/40">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
+            <div
+              onClick={() => setShowProfileModal(true)}
+              title="Click to customize Profile & Anti-Spam Settings"
+              className="flex items-center gap-2.5 cursor-pointer hover:opacity-85 transition-opacity"
+            >
               <div className="w-10 h-10 rounded-full bg-[#00a884]/20 border border-[#00a884]/30 flex items-center justify-center font-bold text-xs text-[#00a884] shrink-0">
-                {currentUser.display_name.slice(0, 2).toUpperCase()}
+                {currentDisplayName.slice(0, 2).toUpperCase()}
               </div>
               <div className="min-w-0">
-                <h1 className="text-sm font-semibold text-[#e9edef] leading-tight truncate max-w-[140px] sm:max-w-[180px]">
-                  {businessName || currentUser.display_name}
+                <h1 className="text-sm font-semibold text-[#e9edef] leading-tight truncate max-w-[130px] sm:max-w-[160px]">
+                  {currentDisplayName}
                 </h1>
                 <div className="flex items-center gap-1.5 text-[11px] text-[#8696a0]">
                   <span className="w-2 h-2 rounded-full bg-[#00a884] animate-pulse"></span>
@@ -988,6 +1090,13 @@ export function MessagingApp({
             <div className="flex items-center gap-1">
               <PWAInstallButton className="hidden sm:inline-flex" />
               <NotificationToggleButton userHandle={currentUser.handle} />
+              <button
+                onClick={() => setShowProfileModal(true)}
+                title="Profile & Anti-Spam Settings"
+                className="p-2 rounded-full text-[#8696a0] hover:text-[#00a884] hover:bg-[#202c33] transition-colors cursor-pointer"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
               <button
                 onClick={() => setShowIdentityModal(true)}
                 title="My Instance Address / Share"
@@ -1058,6 +1167,21 @@ export function MessagingApp({
             >
               Unread
             </button>
+            {accountType === 'business' && (
+              <button
+                onClick={() => setInboxFilter('inquiries')}
+                className={`flex-1 py-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 ${
+                  inboxFilter === 'inquiries' ? 'bg-[#202c33] text-purple-400 font-bold' : 'text-[#8696a0] hover:text-[#e9edef]'
+                }`}
+              >
+                <span>Letterbox</span>
+                {pendingInquiryCount > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-purple-500 text-white font-bold text-[9px] flex items-center justify-center">
+                    {pendingInquiryCount}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
         </div>
 
@@ -1077,7 +1201,7 @@ export function MessagingApp({
                     {req.remote_instance_url.replace(/^https?:\/\//, '')}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
                     onClick={() => handleAcceptFriendRequest(req.remote_handle, req.remote_instance_url)}
                     className="flex-1 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs transition-all cursor-pointer"
@@ -1085,10 +1209,17 @@ export function MessagingApp({
                     Accept
                   </button>
                   <button
-                    onClick={() => handleRejectFriendRequest(req.remote_handle)}
-                    className="px-3 py-1.5 bg-[#202c33] hover:bg-[#222e35] text-[#8696a0] rounded-lg text-xs transition-all cursor-pointer"
+                    onClick={() => handleRejectFriendRequest(req.remote_handle, false)}
+                    className="px-2.5 py-1.5 bg-[#202c33] hover:bg-[#222e35] text-[#8696a0] rounded-lg text-xs transition-all cursor-pointer"
                   >
                     Decline
+                  </button>
+                  <button
+                    onClick={() => handleRejectFriendRequest(req.remote_handle, true, req.remote_instance_url)}
+                    title="Block this root domain"
+                    className="px-2 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-xs transition-all cursor-pointer"
+                  >
+                    Block
                   </button>
                 </div>
               </div>
@@ -1096,9 +1227,79 @@ export function MessagingApp({
           </div>
         )}
 
-        {/* Chats Feed */}
+        {/* Chats or Inquiries Feed */}
         <div className="flex-1 overflow-y-auto divide-y divide-[#202c33]/40">
-          {filteredConversations.length === 0 ? (
+          {inboxFilter === 'inquiries' ? (
+            <div className="p-3 space-y-3">
+              {inquiries.length === 0 ? (
+                <div className="p-8 text-center text-xs text-[#8696a0] space-y-2">
+                  <Store className="w-8 h-8 mx-auto text-[#8696a0]/40 mb-2" />
+                  <p className="font-medium text-[#e9edef]">No Customer Notes Yet</p>
+                  <p className="text-[11px] text-[#8696a0]">
+                    Customers can drop 1 inquiry note into your shop's Letterbox without spamming your server.
+                  </p>
+                </div>
+              ) : (
+                inquiries.map((inq) => (
+                  <div key={inq.id} className="p-3 bg-[#111b21] border border-[#202c33] rounded-xl space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0">
+                        <span className="font-bold text-[#e9edef] block truncate">{inq.sender_name}</span>
+                        <span className="text-[10px] text-[#8696a0] truncate block">
+                          @{inq.sender_handle} • {inq.sender_root_domain}
+                        </span>
+                      </div>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                          inq.status === 'accepted'
+                            ? 'bg-[#00a884]/20 text-[#00a884]'
+                            : inq.status === 'dismissed'
+                            ? 'bg-[#202c33] text-[#8696a0]'
+                            : 'bg-purple-500/20 text-purple-400'
+                        }`}
+                      >
+                        {inq.status}
+                      </span>
+                    </div>
+
+                    <p className="p-2.5 bg-[#0b141a] rounded-lg text-[#e9edef] text-xs border border-[#202c33]/70 leading-relaxed font-sans">
+                      "{inq.content}"
+                    </p>
+
+                    <div className="flex items-center justify-between text-[10px] text-[#8696a0] pt-0.5">
+                      <span>{new Date(inq.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                      <span>1-Card Protected</span>
+                    </div>
+
+                    {inq.status === 'pending' && (
+                      <div className="flex items-center gap-1.5 pt-1">
+                        <button
+                          onClick={() => handleReplyInquiry(inq.id)}
+                          disabled={replyingInquiryId === inq.id}
+                          className="flex-1 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50"
+                        >
+                          {replyingInquiryId === inq.id ? 'Opening Chat...' : 'Reply & Open Chat'}
+                        </button>
+                        <button
+                          onClick={() => handleDismissInquiry(inq.id, false)}
+                          className="px-2.5 py-1.5 bg-[#202c33] hover:bg-[#2a3942] text-[#8696a0] rounded-lg text-xs transition-all cursor-pointer"
+                        >
+                          Dismiss
+                        </button>
+                        <button
+                          onClick={() => handleDismissInquiry(inq.id, true)}
+                          title="Block this root domain permanently"
+                          className="px-2 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-xs transition-all cursor-pointer"
+                        >
+                          Block
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          ) : filteredConversations.length === 0 ? (
             <div className="p-8 text-center text-xs text-[#8696a0] space-y-2">
               <MessageSquare className="w-8 h-8 mx-auto text-[#8696a0]/40 mb-2" />
               <p className="font-medium text-[#e9edef]">No chats in this queue</p>
@@ -1468,6 +1669,23 @@ export function MessagingApp({
                 </p>
               </div>
 
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-[#8696a0]">Friend PIN (Optional / Handshake)</label>
+                  <span className="text-[10px] text-[#00a884] font-medium">Anti-Spam Shield</span>
+                </div>
+                <input
+                  type="text"
+                  value={friendPinInput}
+                  onChange={(e) => setFriendPinInput(e.target.value.toUpperCase())}
+                  placeholder="e.g. NP-7429 (leave blank if they have open privacy)"
+                  className="w-full px-3.5 py-2.5 bg-[#202c33] border border-[#222e35] rounded-xl text-xs sm:text-sm text-[#e9edef] font-mono tracking-wider focus:outline-none focus:border-[#00a884]"
+                />
+                <p className="text-[10px] text-[#8696a0] pl-1">
+                  Required if the contact has enabled PIN-Protected mode to stop spam bots.
+                </p>
+              </div>
+
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
@@ -1701,6 +1919,16 @@ export function MessagingApp({
       )}
 
       </div>
+
+      {/* Profile & Privacy Settings Modal */}
+      <ProfileSettingsModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        currentUser={currentUser}
+        onProfileUpdated={(updated) => {
+          setCurrentDisplayName(updated.displayName)
+        }}
+      />
 
       {/* Offline Connectivity Status Pill */}
       <OfflineIndicator />
