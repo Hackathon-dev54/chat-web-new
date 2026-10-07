@@ -28,7 +28,7 @@ profileRoutes.get('/api/profile', async (c) => {
     accountType: (memoryStore.config.get('account_type') as 'personal' | 'business') || 'personal',
     bio: memoryStore.config.get('bio') || '',
     businessCategory: memoryStore.config.get('business_category') || 'General',
-    privacyMode: (memoryStore.config.get('privacy_mode') as 'open' | 'pin_only' | 'closed') || 'pin_only',
+    privacyMode: (memoryStore.config.get('privacy_mode') as 'open' | 'pin_only' | 'closed') || 'open',
     friendPin: memoryStore.config.get('friend_pin') || '',
     inquiryLetterboxEnabled: memoryStore.config.get('inquiry_letterbox_enabled') !== 'false',
     instanceUrl: c.req.url.replace(/\/api\/.*$/, ''),

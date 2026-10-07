@@ -68,7 +68,7 @@ export function ProfileSettingsModal({
   const [accountType, setAccountType] = useState<'personal' | 'business'>('personal')
   const [bio, setBio] = useState('')
   const [businessCategory, setBusinessCategory] = useState('General & Personal Shop')
-  const [privacyMode, setPrivacyMode] = useState<'open' | 'pin_only' | 'closed'>('pin_only')
+  const [privacyMode, setPrivacyMode] = useState<'open' | 'pin_only' | 'closed'>('open')
   const [friendPin, setFriendPin] = useState('')
   const [inquiryLetterboxEnabled, setInquiryLetterboxEnabled] = useState(true)
   const [instanceUrl, setInstanceUrl] = useState('')

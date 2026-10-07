@@ -80,22 +80,6 @@ federationRoutes.post('/api/federation/requests', async (c) => {
       status: 'pending',
     }
 
-    memoryStore.friendships.set(friendshipId, friendshipRecord)
-    memoryStore.conversations.set(conversationId, convRecord)
-
-    if (db) {
-      try {
-        await ensureD1Database(db)
-        await db.prepare('INSERT OR REPLACE INTO federation_friendships (id, local_user_id, remote_handle, remote_instance_url, status, direction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .bind(friendshipRecord.id, friendshipRecord.local_user_id, friendshipRecord.remote_handle, friendshipRecord.remote_instance_url, friendshipRecord.status, friendshipRecord.direction, now).run()
-
-        await db.prepare('INSERT OR REPLACE INTO conversations (id, user_a, user_b, remote_handle, remote_instance_url, last_message_snippet, last_message_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-          .bind(convRecord.id, convRecord.user_a, convRecord.user_b, convRecord.remote_handle, convRecord.remote_instance_url, convRecord.last_message_snippet, now, convRecord.status).run()
-      } catch (d1Err: any) {
-        console.warn('[D1 Outbound Request Warning]', d1Err?.message)
-      }
-    }
-
     const payload = JSON.stringify({
       from_handle: actualHandle,
       from_display_name: actualDisplayName,
@@ -112,7 +96,7 @@ federationRoutes.post('/api/federation/requests', async (c) => {
       console.warn('[Sign Error]', e)
     }
 
-    let remoteSuccess = false
+    // Handshake with Remote Peer FIRST
     try {
       const remoteRes = await fetch(`${normalizedUrl}/api/federation/v1/requests`, {
         method: 'POST',
@@ -122,16 +106,39 @@ federationRoutes.post('/api/federation/requests', async (c) => {
         },
         body: payload,
       })
-      remoteSuccess = remoteRes.ok
+
+      if (!remoteRes.ok) {
+        const errJson: any = await remoteRes.json().catch(() => ({}))
+        const errMsg = errJson.error || `Recipient rejected the request (Status ${remoteRes.status})`
+        const statusCode = (remoteRes.status >= 400 && remoteRes.status <= 599 ? remoteRes.status : 400) as any
+        return c.json({ error: errMsg, code: errJson.code }, statusCode)
+      }
     } catch (remoteErr: any) {
-      console.warn('[Remote Peer Request Offline/Failed]', remoteErr?.message)
+      return c.json({ error: `Could not reach ${normalizedUrl}: ${remoteErr?.message || 'Host offline or unreachable'}` }, 502)
+    }
+
+    // Only save locally once the recipient server confirms acceptance
+    memoryStore.friendships.set(friendshipId, friendshipRecord)
+    memoryStore.conversations.set(conversationId, convRecord)
+
+    if (db) {
+      try {
+        await ensureD1Database(db)
+        await db.prepare('INSERT OR REPLACE INTO federation_friendships (id, local_user_id, remote_handle, remote_instance_url, status, direction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .bind(friendshipRecord.id, friendshipRecord.local_user_id, friendshipRecord.remote_handle, friendshipRecord.remote_instance_url, friendshipRecord.status, friendshipRecord.direction, now).run()
+
+        await db.prepare('INSERT OR REPLACE INTO conversations (id, user_a, user_b, remote_handle, remote_instance_url, last_message_snippet, last_message_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(convRecord.id, convRecord.user_a, convRecord.user_b, convRecord.remote_handle, convRecord.remote_instance_url, convRecord.last_message_snippet, now, convRecord.status).run()
+      } catch (d1Err: any) {
+        console.warn('[D1 Outbound Request Warning]', d1Err?.message)
+      }
     }
 
     emitUserEvent(localUserId, 'conversation_updated', convRecord)
 
     return c.json({
       success: true,
-      remoteDelivered: remoteSuccess,
+      remoteDelivered: true,
       friendship: friendshipRecord,
       conversation: convRecord,
     })
@@ -169,15 +176,23 @@ federationRoutes.post('/api/federation/v1/requests', async (c) => {
     }
 
     // Security Check 2: Privacy Mode & Friend PIN check
-    let privacyMode = memoryStore.config.get('privacy_mode') || 'pin_only'
+    let privacyMode = memoryStore.config.get('privacy_mode') || 'open'
+    let accountType = memoryStore.config.get('account_type') || 'personal'
     let configuredPin = memoryStore.config.get('friend_pin') || ''
     if (db) {
       try {
         const pModeRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'privacy_mode'").first()
         if (pModeRow?.value) privacyMode = pModeRow.value
+        const aTypeRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'account_type'").first()
+        if (aTypeRow?.value) accountType = aTypeRow.value
         const pinRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'friend_pin'").first()
         if (pinRow?.value) configuredPin = pinRow.value
       } catch {}
+    }
+
+    // Business accounts are open by default to easily connect with customers!
+    if (accountType === 'business') {
+      privacyMode = 'open'
     }
 
     if (privacyMode === 'closed') {
@@ -191,7 +206,7 @@ federationRoutes.post('/api/federation/v1/requests', async (c) => {
       }
       if (!providedPin || providedPin.toUpperCase() !== configuredPin.toUpperCase()) {
         return c.json({
-          error: 'Invalid or missing Friend PIN. This account requires a valid PIN or QR code handshake.',
+          error: 'Invalid or missing Friend PIN. This personal account requires a valid PIN or QR code handshake.',
           code: 'PIN_REQUIRED',
         }, 403)
       }
