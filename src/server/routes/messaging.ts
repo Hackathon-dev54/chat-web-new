@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
 import { ensureD1Database, normalizeUrl } from '../db'
 import { memoryStore, emitUserEvent, broadcastAllStreams } from '../store'
+import { extractRootDomain } from '../domain'
 import { sendPushNotification } from '../webpush'
-import type { Bindings } from '../types'
+import type { Bindings, MemConversation } from '../types'
 
 const messagingRoutes = new Hono<{ Bindings: Bindings }>()
 
@@ -221,14 +222,14 @@ messagingRoutes.post('/api/federation/v1/messages', async (c) => {
       read_at: null,
     })
 
-    let conv = memoryStore.conversations.get(conversationId)
+    let conv: MemConversation | undefined = memoryStore.conversations.get(conversationId)
     if (!conv) {
       conv = {
         id: conversationId,
         user_a: 'usr_admin',
         user_b: cleanSender,
         remote_handle: cleanSender,
-        remote_instance_url: null,
+        remote_instance_url: undefined,
         last_message_snippet: messageRecord.body,
         last_message_at: now,
         status: 'active',
@@ -249,13 +250,15 @@ messagingRoutes.post('/api/federation/v1/messages', async (c) => {
         await db.prepare('INSERT INTO messages (id, conversation_id, sender_id, content, created_at, read_at) VALUES (?, ?, ?, ?, ?, NULL)')
           .bind(messageRecord.id, messageRecord.conversationId, messageRecord.senderId, messageRecord.body, now).run()
         await db.prepare('INSERT OR REPLACE INTO conversations (id, user_a, user_b, remote_handle, remote_instance_url, last_message_snippet, last_message_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, "active")')
-          .bind(conversationId, 'usr_admin', cleanSender, cleanSender, conv.remote_instance_url || null, messageRecord.body, now).run()
+          .bind(conversationId, 'usr_admin', cleanSender, cleanSender, conv?.remote_instance_url || null, messageRecord.body, now).run()
       } catch (d1Err: any) {
         console.warn('[D1 Peer Inbound Message Warning]', d1Err?.message)
       }
     }
 
-    await broadcastAllStreams('conversation_updated', conv, c.env)
+    if (conv) {
+      await broadcastAllStreams('conversation_updated', conv, c.env)
+    }
     await broadcastAllStreams('new_message', messageRecord, c.env)
 
     // Web Push background alert for inbound peer message (asynchronous, never blocks HTTP response)

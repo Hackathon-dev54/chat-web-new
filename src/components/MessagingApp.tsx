@@ -29,6 +29,7 @@ import {
   Phone,
   Shield,
   UserCheck,
+  ArrowRight,
 } from 'lucide-react'
 import {
   getLocalMessages,
@@ -788,18 +789,17 @@ export function MessagingApp({
 
   // Profile, Mode & URL Handshake Initialization
   useEffect(() => {
-    fetch('/api/profile')
+    fetch('/api/profile', { headers: getAuthHeaders() })
       .then((res) => res.json())
       .then((data) => {
         if (data.profile) {
           setAccountType(data.profile.accountType || 'personal')
           if (data.profile.friendPin) setMyFriendPin(data.profile.friendPin)
-          if (data.profile.accountType === 'business') {
-            fetchInquiries()
-          }
         }
       })
       .catch(() => {})
+
+    fetchInquiries()
 
     // Check URL params for QR or direct link handshake: ?add=@user&pin=NP-XXXX
     if (typeof window !== 'undefined') {
@@ -811,8 +811,8 @@ export function MessagingApp({
         if (pinParam) setFriendPinInput(pinParam)
         setShowAddFriendModal(true)
       }
-      if (params.get('tab') === 'inquiries') {
-        setInboxFilter('inquiries')
+      if (params.get('tab') === 'inquiries' || params.get('tab') === 'letterbox') {
+        setInboxFilter('letterbox')
       }
     }
   }, [])
@@ -942,7 +942,7 @@ export function MessagingApp({
   // Customer Inquiries Letterbox API Helpers
   const fetchInquiries = async () => {
     try {
-      const res = await fetch('/api/inquiries')
+      const res = await fetch('/api/inquiries', { headers: getAuthHeaders() })
       if (res.ok) {
         const data = await res.json()
         setInquiries(data.inquiries || [])
@@ -962,12 +962,13 @@ export function MessagingApp({
       const data = await res.json()
       if (res.ok && data.success) {
         await fetchInquiries()
-        runSync()
-        setInboxFilter('all')
+        await runSync()
+        await loadConversations()
+        setInboxFilter(asFriend ? 'friends' : 'letterbox')
         setInquiryActionToast(
           asFriend
-            ? 'Inquiry accepted as Private Friend! Conversation unlocked.'
-            : 'Inquiry accepted as Letterbox Customer Chat! Ready to chat.'
+            ? 'Inquiry accepted as Private Friend! Unlocked under Friends tab.'
+            : 'Inquiry accepted as Letterbox Customer Chat! Unlocked under Letterbox tab.'
         )
         setTimeout(() => setInquiryActionToast(null), 3500)
       } else {
@@ -1270,7 +1271,7 @@ export function MessagingApp({
               Friends
             </button>
             <button
-              onClick={() => setInboxFilter(accountType === 'business' ? 'inquiries' : 'letterbox')}
+              onClick={() => setInboxFilter('letterbox')}
               className={`flex-1 py-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 ${
                 inboxFilter === 'inquiries' || inboxFilter === 'letterbox'
                   ? 'bg-[#202c33] text-purple-400 font-bold'
@@ -1283,7 +1284,7 @@ export function MessagingApp({
                   {pendingInquiryCount}
                 </span>
               ) : (
-                conversations.some((c) => c.status === 'letterbox') && (
+                (conversations.some((c) => c.status === 'letterbox') || inquiries.some((i) => i.status === 'pending')) && (
                   <span className="w-2 h-2 rounded-full bg-purple-400"></span>
                 )
               )}
@@ -1343,100 +1344,274 @@ export function MessagingApp({
 
         {/* Chats or Inquiries Feed */}
         <div className="flex-1 overflow-y-auto divide-y divide-[#202c33]/40">
-          {inboxFilter === 'inquiries' ? (
+          {inboxFilter === 'letterbox' || inboxFilter === 'inquiries' ? (
             <div className="p-3 space-y-3">
-              {inquiries.length === 0 ? (
-                <div className="p-8 text-center text-xs text-[#8696a0] space-y-2">
-                  <Store className="w-8 h-8 mx-auto text-[#8696a0]/40 mb-2" />
-                  <p className="font-medium text-[#e9edef]">No Customer Notes Yet</p>
-                  <p className="text-[11px] text-[#8696a0]">
-                    Customers can drop 1 inquiry note into your shop's Letterbox without spamming your server.
-                  </p>
+              {accountType === 'personal' ? (
+                /* CUSTOMER / PRIVATE ACCOUNT LETTERBOX */
+                <div className="space-y-3">
+                  <div className="p-3 bg-gradient-to-r from-purple-950/40 via-[#111b21] to-[#00a884]/10 border border-purple-500/30 rounded-xl space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <Store className="w-3.5 h-3.5 text-purple-400" />
+                        <span className="font-bold text-xs text-[#e9edef]">My Customer Letterbox</span>
+                      </div>
+                      <a
+                        href="/shop"
+                        className="text-[10px] bg-[#00a884]/20 text-[#00a884] hover:bg-[#00a884]/30 px-2 py-0.5 rounded font-bold border border-[#00a884]/30 flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>+ Drop Note</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    </div>
+                    <p className="text-[11px] text-[#8696a0]">
+                      Track status of inquiries you dropped to shops. Once accepted, chat unlocks in real-time.
+                    </p>
+                  </div>
+
+                  {/* 1. Pending & Recent Notes sent by this customer */}
+                  {inquiries.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-[10px] font-bold text-[#8696a0] uppercase tracking-wider block px-1">
+                        Sent Inquiries ({inquiries.length})
+                      </span>
+                      {inquiries.map((inq) => {
+                        const matchingConv = conversations.find(
+                          (c) => c.status === 'letterbox'
+                        )
+                        return (
+                          <div key={inq.id} className="p-3 bg-[#111b21] border border-[#202c33] rounded-xl space-y-2 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-[#e9edef]">{inq.category || 'Customer Note'}</span>
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                                  inq.status === 'accepted'
+                                    ? 'bg-[#00a884]/20 text-[#00a884]'
+                                    : inq.status === 'dismissed'
+                                    ? 'bg-[#202c33] text-[#8696a0]'
+                                    : 'bg-amber-500/20 text-amber-400'
+                                }`}
+                              >
+                                {inq.status === 'accepted' ? 'Accepted' : inq.status === 'dismissed' ? 'Dismissed' : 'Pending Review'}
+                              </span>
+                            </div>
+
+                            <p className="p-2.5 bg-[#0b141a] rounded-lg text-[#e9edef] text-xs border border-[#202c33]/70 leading-relaxed font-sans">
+                              "{inq.content}"
+                            </p>
+
+                            <div className="flex items-center justify-between text-[10px] text-[#8696a0]">
+                              <span>{new Date(inq.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                              {inq.status === 'accepted' && (
+                                <button
+                                  onClick={() => {
+                                    const conv = matchingConv || conversations.find((c) => c.status === 'letterbox')
+                                    if (conv) setActiveConv(conv)
+                                  }}
+                                  className="text-[#00a884] font-bold hover:underline flex items-center gap-1 cursor-pointer"
+                                >
+                                  <span>Open Chat</span>
+                                  <ArrowRight className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* 2. Accepted 2-way Customer Chats for this personal account */}
+                  {filteredConversations.length > 0 && (
+                    <div className="space-y-2 pt-2 border-t border-[#202c33]/60">
+                      <span className="text-[10px] font-bold text-[#8696a0] uppercase tracking-wider block px-1">
+                        Active Customer Chats ({filteredConversations.length})
+                      </span>
+                      {filteredConversations.map((conv) => {
+                        const isActive = activeConv?.id === conv.id
+                        return (
+                          <div
+                            key={conv.id}
+                            onClick={() => setActiveConv(conv)}
+                            className={`p-3 rounded-xl border border-[#202c33] flex items-start gap-3 cursor-pointer transition-colors ${
+                              isActive ? 'bg-[#2a3942]' : 'bg-[#111b21] hover:bg-[#202c33]/50'
+                            }`}
+                          >
+                            <div className="w-10 h-10 rounded-full bg-purple-500/20 border border-purple-500/30 flex items-center justify-center font-bold text-xs text-purple-300 shrink-0">
+                              {conv.otherUser.displayName.slice(0, 2).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-[#e9edef] truncate">{conv.otherUser.displayName}</span>
+                                {conv.lastMessage && (
+                                  <span className="text-[10px] text-[#8696a0]">
+                                    {new Date(conv.lastMessage.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-[#8696a0] truncate mt-0.5">{conv.lastMessage?.content || 'Chat open'}</p>
+                              <span className="inline-flex mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 items-center gap-1">
+                                <Store className="w-2.5 h-2.5" /> Customer Letterbox
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {inquiries.length === 0 && filteredConversations.length === 0 && (
+                    <div className="p-8 text-center text-xs text-[#8696a0] space-y-3 bg-[#111b21] rounded-2xl border border-[#202c33]">
+                      <Store className="w-8 h-8 mx-auto text-purple-400/60" />
+                      <p className="font-semibold text-[#e9edef]">No Letterbox Notes Yet</p>
+                      <p className="text-[11px] text-[#8696a0] max-w-xs mx-auto">
+                        You haven't dropped any notes to shops. Visit a shop portfolio to inquire about prices, stock, or deliveries!
+                      </p>
+                      <a
+                        href="/shop"
+                        className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#00a884] text-[#111b21] rounded-xl font-bold text-xs hover:bg-[#02906f] transition-all cursor-pointer shadow-md"
+                      >
+                        <span>Visit Shop Letterbox</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  )}
                 </div>
               ) : (
-                inquiries.map((inq) => (
-                  <div key={inq.id} className="p-3 bg-[#111b21] border border-[#202c33] rounded-xl space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <div className="min-w-0">
-                        <span className="font-bold text-[#e9edef] block truncate">{inq.sender_name}</span>
-                        <span className="text-[10px] text-[#8696a0] truncate block">
-                          @{inq.sender_handle} • {inq.sender_root_domain}
-                        </span>
+                /* BUSINESS ACCOUNT LETTERBOX */
+                <div className="space-y-3">
+                  {inquiries.length === 0 ? (
+                    <div className="p-8 text-center text-xs text-[#8696a0] space-y-2 bg-[#111b21] rounded-2xl border border-[#202c33]">
+                      <Store className="w-8 h-8 mx-auto text-[#8696a0]/40 mb-2" />
+                      <p className="font-medium text-[#e9edef]">No Customer Notes Yet</p>
+                      <p className="text-[11px] text-[#8696a0]">
+                        Customers drop 1 inquiry note into your shop's Letterbox without spamming server compute.
+                      </p>
+                    </div>
+                  ) : (
+                    inquiries.map((inq) => (
+                      <div key={inq.id} className="p-3 bg-[#111b21] border border-[#202c33] rounded-xl space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <span className="font-bold text-[#e9edef] block truncate">{inq.sender_name}</span>
+                            <span className="text-[10px] text-[#8696a0] truncate block">
+                              @{inq.sender_handle} • {inq.sender_root_domain}
+                            </span>
+                          </div>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
+                              inq.status === 'accepted'
+                                ? 'bg-[#00a884]/20 text-[#00a884]'
+                                : inq.status === 'dismissed'
+                                ? 'bg-[#202c33] text-[#8696a0]'
+                                : 'bg-purple-500/20 text-purple-400'
+                            }`}
+                          >
+                            {inq.status}
+                          </span>
+                        </div>
+
+                        <p className="p-2.5 bg-[#0b141a] rounded-lg text-[#e9edef] text-xs border border-[#202c33]/70 leading-relaxed font-sans">
+                          "{inq.content}"
+                        </p>
+
+                        <div className="flex items-center justify-between text-[10px] text-[#8696a0] pt-0.5">
+                          <span>{new Date(inq.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                          <span className="text-purple-400 font-semibold">1-Card Protected</span>
+                        </div>
+
+                        {inq.status === 'pending' && (
+                          <div className="space-y-2 pt-1">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => handleReplyInquiry(inq.id, false)}
+                                disabled={replyingInquiryId === inq.id}
+                                title="Accept as Customer Letterbox Chat (Friends list remains clean)"
+                                className="flex-1 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-sm"
+                              >
+                                <Store className="w-3.5 h-3.5" />
+                                <span>{replyingInquiryId === inq.id ? 'Opening...' : 'Accept as Letterbox'}</span>
+                              </button>
+                              <button
+                                onClick={() => handleReplyInquiry(inq.id, true)}
+                                disabled={replyingInquiryId === inq.id}
+                                title="Accept and promote customer to Trusted Friend under Friends tab"
+                                className="flex-1 py-1.5 bg-purple-600/25 hover:bg-purple-600/35 border border-purple-500/40 text-purple-200 font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                              >
+                                <UserCheck className="w-3.5 h-3.5 text-purple-300" />
+                                <span>Accept as Friend</span>
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 justify-end">
+                              {inq.content.includes('📞') && (
+                                <a
+                                  href={`tel:${inq.content.split('📞')[1]?.split('•')[0]?.trim() || ''}`}
+                                  className="px-2.5 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#00a884] rounded-lg text-[11px] flex items-center gap-1 font-semibold mr-auto cursor-pointer"
+                                  title="Call customer directly"
+                                >
+                                  <Phone className="w-3 h-3" />
+                                  <span>Call</span>
+                                </a>
+                              )}
+                              <button
+                                onClick={() => handleDismissInquiry(inq.id, false)}
+                                className="px-2.5 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#8696a0] rounded-lg text-[11px] transition-all cursor-pointer"
+                              >
+                                Dismiss
+                              </button>
+                              <button
+                                onClick={() => handleDismissInquiry(inq.id, true)}
+                                title="Block this root domain permanently"
+                                className="px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-[11px] transition-all cursor-pointer"
+                              >
+                                Block
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
-                          inq.status === 'accepted'
-                            ? 'bg-[#00a884]/20 text-[#00a884]'
-                            : inq.status === 'dismissed'
-                            ? 'bg-[#202c33] text-[#8696a0]'
-                            : 'bg-purple-500/20 text-purple-400'
-                        }`}
-                      >
-                        {inq.status}
+                    ))
+                  )}
+
+                  {/* Active Customer Chats for merchant */}
+                  {filteredConversations.length > 0 && (
+                    <div className="space-y-2 pt-2 border-t border-[#202c33]/60">
+                      <span className="text-[10px] font-bold text-[#8696a0] uppercase tracking-wider block px-1">
+                        Active Customer Chats ({filteredConversations.length})
                       </span>
+                      {filteredConversations.map((conv) => {
+                        const isActive = activeConv?.id === conv.id
+                        return (
+                          <div
+                            key={conv.id}
+                            onClick={() => setActiveConv(conv)}
+                            className={`p-3 rounded-xl border border-[#202c33] flex items-start gap-3 cursor-pointer transition-colors ${
+                              isActive ? 'bg-[#2a3942]' : 'bg-[#111b21] hover:bg-[#202c33]/50'
+                            }`}
+                          >
+                            <div className="w-10 h-10 rounded-full bg-purple-500/20 border border-purple-500/30 flex items-center justify-center font-bold text-xs text-purple-300 shrink-0">
+                              {conv.otherUser.displayName.slice(0, 2).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-[#e9edef] truncate">{conv.otherUser.displayName}</span>
+                                {conv.lastMessage && (
+                                  <span className="text-[10px] text-[#8696a0]">
+                                    {new Date(conv.lastMessage.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-[#8696a0] truncate mt-0.5">{conv.lastMessage?.content || 'Chat open'}</p>
+                              <span className="inline-flex mt-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 items-center gap-1">
+                                <Store className="w-2.5 h-2.5" /> Customer Letterbox
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
-
-                    <p className="p-2.5 bg-[#0b141a] rounded-lg text-[#e9edef] text-xs border border-[#202c33]/70 leading-relaxed font-sans">
-                      "{inq.content}"
-                    </p>
-
-                    <div className="flex items-center justify-between text-[10px] text-[#8696a0] pt-0.5">
-                      <span>{new Date(inq.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
-                      <span>1-Card Protected</span>
-                    </div>
-
-                    {inq.status === 'pending' && (
-                      <div className="space-y-2 pt-1">
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => handleReplyInquiry(inq.id, false)}
-                            disabled={replyingInquiryId === inq.id}
-                            title="Accept inquiry as a separate Letterbox customer inquiry chat"
-                            className="flex-1 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-sm"
-                          >
-                            <Store className="w-3.5 h-3.5" />
-                            <span>{replyingInquiryId === inq.id ? 'Opening...' : 'Accept as Letterbox'}</span>
-                          </button>
-                          <button
-                            onClick={() => handleReplyInquiry(inq.id, true)}
-                            disabled={replyingInquiryId === inq.id}
-                            title="Accept inquiry and add customer as a trusted Private Friend"
-                            className="flex-1 py-1.5 bg-purple-600/25 hover:bg-purple-600/35 border border-purple-500/40 text-purple-200 font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
-                          >
-                            <UserCheck className="w-3.5 h-3.5 text-purple-300" />
-                            <span>Accept as Friend</span>
-                          </button>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 justify-end">
-                          {inq.content.includes('📞') && (
-                            <a
-                              href={`tel:${inq.content.split('📞')[1]?.split('•')[0]?.trim() || ''}`}
-                              className="px-2.5 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#00a884] rounded-lg text-[11px] flex items-center gap-1 font-semibold mr-auto cursor-pointer"
-                              title="Call customer directly"
-                            >
-                              <Phone className="w-3 h-3" />
-                              <span>Call</span>
-                            </a>
-                          )}
-                          <button
-                            onClick={() => handleDismissInquiry(inq.id, false)}
-                            className="px-2.5 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#8696a0] rounded-lg text-[11px] transition-all cursor-pointer"
-                          >
-                            Dismiss
-                          </button>
-                          <button
-                            onClick={() => handleDismissInquiry(inq.id, true)}
-                            title="Block this root domain permanently"
-                            className="px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-[11px] transition-all cursor-pointer"
-                          >
-                            Block
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))
+                  )}
+                </div>
               )}
             </div>
           ) : filteredConversations.length === 0 ? (
@@ -1444,7 +1619,9 @@ export function MessagingApp({
               <MessageSquare className="w-8 h-8 mx-auto text-[#8696a0]/40 mb-2" />
               <p className="font-medium text-[#e9edef]">No chats in this queue</p>
               <p className="text-[11px] text-[#8696a0]">
-                Click "+ Connect Contact" above to connect to another deployed instance.
+                {inboxFilter === 'friends'
+                  ? 'Your private Friends list is clean. Accept inquiries as Friends to promote them here.'
+                  : 'Click "+ Connect Contact" above to connect to another deployed instance.'}
               </p>
             </div>
           ) : (
@@ -1528,7 +1705,7 @@ export function MessagingApp({
                     <span className="truncate">{activeConv.otherUser.displayName}</span>
                     {activeConv.status === 'letterbox' ? (
                       <span className="px-1.5 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 shrink-0 flex items-center gap-1">
-                        <Store className="w-2.5 h-2.5" /> Letterbox Customer
+                        <Store className="w-2.5 h-2.5" /> {accountType === 'personal' ? 'Letterbox Shop' : 'Letterbox Customer'}
                       </span>
                     ) : activeConv.status === 'pending' ? (
                       <span className="px-1.5 py-0.5 rounded-full text-[9px] sm:text-[10px] font-normal bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">

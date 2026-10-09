@@ -9,9 +9,11 @@ export const D1_INIT_STATEMENTS = [
   'CREATE TABLE IF NOT EXISTS federation_friendships (id TEXT PRIMARY KEY, local_user_id TEXT NOT NULL, remote_handle TEXT NOT NULL, remote_instance_url TEXT NOT NULL, status TEXT DEFAULT "pending", direction TEXT DEFAULT "outgoing", created_at INTEGER NOT NULL)',
   'CREATE TABLE IF NOT EXISTS media_attachments (id TEXT PRIMARY KEY, content_type TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL)',
   'CREATE TABLE IF NOT EXISTS push_subscriptions (id TEXT PRIMARY KEY, user_handle TEXT NOT NULL, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, user_agent TEXT, created_at INTEGER NOT NULL)',
-  'CREATE TABLE IF NOT EXISTS static_inquiries (id TEXT PRIMARY KEY, sender_handle TEXT NOT NULL, sender_name TEXT NOT NULL, sender_root_domain TEXT NOT NULL, sender_origin_url TEXT NOT NULL, content TEXT NOT NULL, status TEXT DEFAULT "pending", created_at INTEGER NOT NULL)',
+  'CREATE TABLE IF NOT EXISTS static_inquiries (id TEXT PRIMARY KEY, sender_handle TEXT NOT NULL, sender_name TEXT NOT NULL, sender_user_id TEXT, sender_root_domain TEXT NOT NULL, sender_origin_url TEXT NOT NULL, category TEXT, content TEXT NOT NULL, status TEXT DEFAULT "pending", created_at INTEGER NOT NULL)',
   'CREATE TABLE IF NOT EXISTS blocked_domains (root_domain TEXT PRIMARY KEY, reason TEXT, blocked_at INTEGER NOT NULL)',
   'CREATE INDEX IF NOT EXISTS idx_inquiries_root_domain ON static_inquiries(sender_root_domain, status)',
+  'CREATE INDEX IF NOT EXISTS idx_inquiries_sender_handle ON static_inquiries(sender_handle, status)',
+  'CREATE INDEX IF NOT EXISTS idx_inquiries_sender_user ON static_inquiries(sender_user_id, status)',
   'CREATE INDEX IF NOT EXISTS idx_inquiries_created ON static_inquiries(created_at DESC)',
   'CREATE INDEX IF NOT EXISTS idx_push_user_handle ON push_subscriptions(user_handle)',
   'CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON messages(conversation_id, created_at DESC)',
@@ -32,6 +34,13 @@ export async function ensureD1Database(db: any) {
         console.warn('[D1 stmt warning]', stmtErr?.message)
       }
     }
+    // Safe progressive migrations for pre-existing tables
+    try {
+      await db.prepare('ALTER TABLE static_inquiries ADD COLUMN sender_user_id TEXT').run()
+    } catch {}
+    try {
+      await db.prepare('ALTER TABLE static_inquiries ADD COLUMN category TEXT').run()
+    } catch {}
     d1Initialized = true
   } catch (err: any) {
     console.warn('[D1 Migration Warning]', err?.message)

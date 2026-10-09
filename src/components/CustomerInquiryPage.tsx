@@ -17,9 +17,8 @@ import {
   Share2,
   Copy,
   Check,
-  ShoppingBag,
   BadgeCheck,
-  ChevronRight,
+  User,
   ExternalLink,
 } from 'lucide-react'
 
@@ -39,7 +38,9 @@ interface ShopProfile {
 
 interface CustomerInquiryPageProps {
   shopHandle?: string
+  currentUser?: { id: string; handle: string; display_name: string; role?: string } | null
   onSwitchToOwnerLogin: () => void
+  onGoToApp?: () => void
 }
 
 const INQUIRY_CATEGORIES = [
@@ -51,21 +52,26 @@ const INQUIRY_CATEGORIES = [
 
 export function CustomerInquiryPage({
   shopHandle = 'admin',
+  currentUser = null,
   onSwitchToOwnerLogin,
+  onGoToApp,
 }: CustomerInquiryPageProps) {
   const [profile, setProfile] = useState<ShopProfile | null>(null)
   const [loading, setLoading] = useState(true)
+  const [authedUser, setAuthedUser] = useState<any>(currentUser)
   const [selectedCategory, setSelectedCategory] = useState('🏷️ Price & Stock')
-  const [senderName, setSenderName] = useState('')
-  const [senderContact, setSenderContact] = useState('')
+  const [senderName, setSenderName] = useState(currentUser?.display_name || '')
+  const [senderContact, setSenderContact] = useState(currentUser?.handle ? `@${currentUser.handle}` : '')
   const [noteContent, setNoteContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [existingInquiry, setExistingInquiry] = useState<any>(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [copiedShare, setCopiedShare] = useState(false)
 
+  // 1. Load shop profile & detect existing auth session
   useEffect(() => {
-    async function loadShop() {
+    async function loadData() {
       try {
         const res = await fetch('/api/profile')
         if (res.ok) {
@@ -74,20 +80,54 @@ export function CustomerInquiryPage({
             setProfile(data.profile)
           }
         }
+
+        // If currentUser was not passed directly, verify stored token
+        const token = localStorage.getItem('chatze_auth_token')
+        let resolvedUser = currentUser
+        if (!resolvedUser && token) {
+          try {
+            const sRes = await fetch('/api/auth/session', {
+              headers: { Authorization: `Bearer ${token}` },
+            })
+            if (sRes.ok) {
+              const sData = await sRes.json()
+              if (sData.user) {
+                resolvedUser = sData.user
+                setAuthedUser(sData.user)
+                if (!senderName) setSenderName(sData.user.display_name)
+                if (!senderContact) setSenderContact(`@${sData.user.handle}`)
+              }
+            }
+          } catch {}
+        }
+
+        // Check if this user already has an active or pending inquiry for this shop
+        const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}
+        const inqRes = await fetch('/api/inquiries', { headers: authHeader })
+        if (inqRes.ok) {
+          const inqData = await inqRes.json()
+          if (inqData.inquiries && inqData.inquiries.length > 0) {
+            const myNote = inqData.inquiries.find(
+              (i: any) =>
+                i.status === 'pending' ||
+                (resolvedUser && (i.sender_handle === resolvedUser.handle || i.sender_user_id === resolvedUser.id))
+            )
+            if (myNote) {
+              setExistingInquiry(myNote)
+              if (myNote.status === 'pending' || myNote.status === 'accepted') {
+                setSubmitted(true)
+              }
+            }
+          }
+        }
       } catch (e) {
-        console.warn('Failed to load shop info', e)
+        console.warn('Failed to load shop or inquiry data', e)
       } finally {
         setLoading(false)
       }
     }
-    loadShop()
-
-    // Check if client has already submitted a note previously
-    const existing = localStorage.getItem(`chatze_inq_${shopHandle}`)
-    if (existing) {
-      setSubmitted(true)
-    }
-  }, [shopHandle])
+    loadData()
+  }, [shopHandle, currentUser])
 
   const handleCopyLink = () => {
     if (typeof window !== 'undefined') {
@@ -100,20 +140,34 @@ export function CustomerInquiryPage({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!noteContent.trim() || !senderName.trim()) return
+    if (!noteContent.trim()) return
+
+    const effectiveName = (senderName.trim() || authedUser?.display_name || '').trim()
+    if (!effectiveName) {
+      setErrorMessage('Please provide your name or sign in to your Chatze account.')
+      return
+    }
 
     setSubmitting(true)
     setErrorMessage('')
 
+    const token = localStorage.getItem('chatze_auth_token')
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
     try {
+      const cleanContact = senderContact.trim()
+      const effectiveHandle = authedUser?.handle || cleanContact.replace(/^@/, '') || effectiveName.toLowerCase().replace(/\s+/g, '_')
+
       const res = await fetch('/api/inquiries', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           shopHandle,
-          senderName: senderName.trim(),
-          senderHandle: senderContact.trim() || senderName.toLowerCase().replace(/\s+/g, '_'),
-          contactPhone: senderContact.trim(),
+          senderName: effectiveName,
+          senderHandle: effectiveHandle,
+          senderUserId: authedUser?.id || null,
+          contactPhone: cleanContact.startsWith('@') ? '' : cleanContact,
           category: selectedCategory,
           content: noteContent.trim(),
           senderOriginUrl: window.location.origin,
@@ -123,6 +177,13 @@ export function CustomerInquiryPage({
       const data = await res.json()
       if (res.ok && data.success) {
         setSubmitted(true)
+        setExistingInquiry({
+          id: data.inquiryId,
+          content: noteContent.trim(),
+          category: selectedCategory,
+          status: 'pending',
+          created_at: Date.now(),
+        })
         localStorage.setItem(`chatze_inq_${shopHandle}`, 'true')
       } else {
         setErrorMessage(data.error || 'Failed to submit inquiry')
@@ -131,6 +192,16 @@ export function CustomerInquiryPage({
       setErrorMessage(err?.message || 'Network error while submitting note')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleNavigateToLetterbox = () => {
+    if (onGoToApp) {
+      onGoToApp()
+      return
+    }
+    if (typeof window !== 'undefined') {
+      window.location.href = '/?tab=letterbox'
     }
   }
 
@@ -151,7 +222,7 @@ export function CustomerInquiryPage({
               <div className="flex items-center gap-2">
                 <span className="font-extrabold text-sm tracking-wide text-[#e9edef]">Chatze Nepal</span>
                 <span className="text-[10px] bg-[#00a884]/15 text-[#00a884] border border-[#00a884]/30 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                  <BadgeCheck className="w-3 h-3" /> Verified Business
+                  <BadgeCheck className="w-3 h-3" /> Verified Shop
                 </span>
               </div>
             </div>
@@ -176,13 +247,23 @@ export function CustomerInquiryPage({
               )}
             </button>
 
-            <button
-              onClick={onSwitchToOwnerLogin}
-              className="text-xs font-semibold text-[#8696a0] hover:text-[#00a884] transition-colors flex items-center gap-1 py-1.5 px-2.5 rounded-lg hover:bg-[#202c33]/50 cursor-pointer"
-            >
-              <span>Owner Login</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </button>
+            {authedUser ? (
+              <button
+                onClick={handleNavigateToLetterbox}
+                className="text-xs font-semibold text-[#00a884] hover:bg-[#00a884]/10 transition-colors flex items-center gap-1.5 py-1.5 px-3 rounded-lg border border-[#00a884]/30 cursor-pointer"
+              >
+                <span>My Letterbox</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            ) : (
+              <button
+                onClick={onSwitchToOwnerLogin}
+                className="text-xs font-semibold text-[#8696a0] hover:text-[#00a884] transition-colors flex items-center gap-1 py-1.5 px-2.5 rounded-lg hover:bg-[#202c33]/50 cursor-pointer"
+              >
+                <span>Account Login</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -296,9 +377,54 @@ export function CustomerInquiryPage({
                     </span>
                   </div>
                   <p className="text-xs text-[#8696a0] mt-1 leading-relaxed">
-                    Ask about price, stock availability, customized orders, or delivery location. No app download or account creation required!
+                    Ask about price, stock availability, custom orders, or delivery location. Zero spam, directly delivered!
                   </p>
                 </div>
+
+                {/* Authenticated Customer Identity Card (Suraj Singh / Verified Customer) */}
+                {authedUser ? (
+                  <div className="p-3.5 bg-gradient-to-r from-[#00a884]/15 via-[#111b21] to-purple-950/20 border border-[#00a884]/40 rounded-xl flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-full bg-[#00a884]/20 border border-[#00a884]/50 flex items-center justify-center font-bold text-xs text-[#00a884] shrink-0">
+                        {authedUser.display_name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold text-[#e9edef] flex items-center gap-1.5 truncate">
+                          <span className="truncate">{authedUser.display_name}</span>
+                          <span className="text-[10px] bg-[#00a884]/20 text-[#00a884] px-1.5 py-0.5 rounded font-mono font-bold shrink-0">
+                            @{authedUser.handle}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-[#8696a0] mt-0.5 truncate">
+                          Verified Account • Replies route directly to your Letterbox
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleNavigateToLetterbox}
+                      className="text-[11px] font-bold text-[#00a884] hover:underline flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      <span>My Chats</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-[#0b141a] border border-[#202c33] rounded-xl flex items-center justify-between text-xs text-[#8696a0]">
+                    <div className="flex items-center gap-2">
+                      <User className="w-4 h-4 text-[#8696a0]" />
+                      <span>Submitting as guest visitor</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={onSwitchToOwnerLogin}
+                      className="text-[#00a884] font-semibold hover:underline cursor-pointer"
+                    >
+                      Sign In to Chatze
+                    </button>
+                  </div>
+                )}
 
                 {submitted ? (
                   <div className="p-6 bg-gradient-to-b from-[#00a884]/15 to-[#111b21] border border-[#00a884]/40 rounded-2xl space-y-4 text-center animate-fade-in">
@@ -307,34 +433,64 @@ export function CustomerInquiryPage({
                     </div>
                     <div className="space-y-1.5">
                       <h3 className="font-extrabold text-base text-[#e9edef]">
-                        Inquiry Placed in Letterbox! 📬
+                        {existingInquiry?.status === 'accepted'
+                          ? 'Inquiry Accepted by Shop! 💬'
+                          : 'Inquiry Placed in Letterbox! 📬'}
                       </h3>
                       <p className="text-xs text-[#8696a0] max-w-md mx-auto leading-relaxed">
-                        Your note has been securely delivered to <strong className="text-[#e9edef]">{profile?.displayName}</strong>.
-                        To protect the shop from automated flood bots, new inquiries from your device are paused until the owner reviews this card.
+                        {existingInquiry?.status === 'accepted'
+                          ? `The shop owner accepted your note! You can now chat in 2-way real-time without losing messages.`
+                          : `Your note has been securely delivered to ${profile?.displayName || 'the shop owner'}. Verified identity: @${authedUser?.handle || senderContact || 'customer'}.`}
                       </p>
                     </div>
 
-                    <div className="p-3.5 bg-[#0b141a] rounded-xl border border-[#202c33] max-w-sm mx-auto text-left space-y-1 text-xs">
-                      <div className="text-[11px] text-[#00a884] font-semibold">
-                        Status: Pending Owner Review
+                    {existingInquiry && (
+                      <div className="p-3.5 bg-[#0b141a] rounded-xl border border-[#202c33] max-w-sm mx-auto text-left space-y-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-bold text-purple-400">
+                            {existingInquiry.category || selectedCategory}
+                          </span>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
+                              existingInquiry.status === 'accepted'
+                                ? 'bg-[#00a884]/20 text-[#00a884]'
+                                : 'bg-amber-500/20 text-amber-400'
+                            }`}
+                          >
+                            {existingInquiry.status === 'accepted' ? 'Accepted' : 'Pending Review'}
+                          </span>
+                        </div>
+                        <p className="text-[#e9edef] text-[11px] italic bg-[#111b21] p-2 rounded border border-[#202c33]">
+                          "{existingInquiry.content || noteContent}"
+                        </p>
+                        <div className="text-[#8696a0] text-[10px] flex items-center gap-1.5">
+                          <Clock className="w-3 h-3 text-purple-400" />
+                          <span>Owner receives alerts instantly on mobile.</span>
+                        </div>
                       </div>
-                      <div className="text-[#8696a0] text-[11px] flex items-center gap-1.5">
-                        <Clock className="w-3.5 h-3.5 text-purple-400" />
-                        <span>The owner receives an alert on their phone immediately.</span>
-                      </div>
-                    </div>
+                    )}
 
-                    <button
-                      onClick={() => {
-                        localStorage.removeItem(`chatze_inq_${shopHandle}`)
-                        setSubmitted(false)
-                        setNoteContent('')
-                      }}
-                      className="text-xs font-semibold text-[#8696a0] hover:text-[#00a884] underline underline-offset-4 cursor-pointer pt-2"
-                    >
-                      Need to drop another note or update info? Click here
-                    </button>
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-2">
+                      <button
+                        onClick={handleNavigateToLetterbox}
+                        className="w-full sm:w-auto px-5 py-2.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-extrabold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-[#00a884]/20 cursor-pointer transition-all"
+                      >
+                        <MessageSquare className="w-4 h-4" />
+                        <span>Go to My Letterbox</span>
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          localStorage.removeItem(`chatze_inq_${shopHandle}`)
+                          setSubmitted(false)
+                          setExistingInquiry(null)
+                          setNoteContent('')
+                        }}
+                        className="text-xs font-semibold text-[#8696a0] hover:text-[#e9edef] cursor-pointer py-2 px-3"
+                      >
+                        Drop another note
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <form onSubmit={handleSubmit} className="space-y-4.5">
@@ -372,7 +528,7 @@ export function CustomerInquiryPage({
                           type="text"
                           value={senderName}
                           onChange={(e) => setSenderName(e.target.value)}
-                          placeholder="e.g. Aarav Sharma"
+                          placeholder="e.g. Suraj Singh"
                           required
                           className="w-full px-3.5 py-2.5 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/50 focus:outline-none focus:border-[#00a884] transition-all"
                         />
@@ -380,13 +536,13 @@ export function CustomerInquiryPage({
 
                       <div>
                         <label className="font-semibold text-xs text-[#8696a0] block mb-1">
-                          Phone / WhatsApp / Email <span className="text-rose-400">*</span>
+                          Handle / Phone / Email <span className="text-rose-400">*</span>
                         </label>
                         <input
                           type="text"
                           value={senderContact}
                           onChange={(e) => setSenderContact(e.target.value)}
-                          placeholder="e.g. 9841XXXXXX or email"
+                          placeholder="e.g. @suraj_singh or 9841XXXXXX"
                           required
                           className="w-full px-3.5 py-2.5 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/50 focus:outline-none focus:border-[#00a884] transition-all"
                         />
@@ -424,7 +580,7 @@ export function CustomerInquiryPage({
                     {/* Submit Button */}
                     <button
                       type="submit"
-                      disabled={submitting || !noteContent.trim() || !senderName.trim()}
+                      disabled={submitting || !noteContent.trim()}
                       className="w-full py-3 px-4 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#00a884]/20 cursor-pointer disabled:opacity-50"
                     >
                       {submitting ? (
@@ -449,7 +605,7 @@ export function CustomerInquiryPage({
                     <span>Protected by Cloudflare Edge & Anti-Spam Shield</span>
                   </span>
                   <span className="text-[#8696a0]/80">
-                    1-Card Limit: Strict Quota & Zero Bot Flood
+                    1-Card Limit: Zero Invocations & Zero Spam
                   </span>
                 </div>
               </div>
@@ -465,4 +621,5 @@ export function CustomerInquiryPage({
     </div>
   )
 }
+
 export default CustomerInquiryPage

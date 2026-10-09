@@ -97,7 +97,16 @@ export function App() {
   if (isShopVisitor) {
     return (
       <CustomerInquiryPage
+        currentUser={currentUser}
         onSwitchToOwnerLogin={() => setForceLogin(true)}
+        onGoToApp={() => {
+          const url = new URL(window.location.href)
+          url.pathname = '/'
+          url.searchParams.delete('shop')
+          url.searchParams.delete('letterbox')
+          url.searchParams.set('tab', 'letterbox')
+          window.location.href = url.pathname + '?' + url.searchParams.toString()
+        }}
       />
     )
   }

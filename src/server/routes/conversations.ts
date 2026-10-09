@@ -1,26 +1,91 @@
 import { Hono } from 'hono'
 import { ensureD1Database } from '../db'
-import { memoryStore } from '../store'
+import { memoryStore, validateSession } from '../store'
 import type { Bindings } from '../types'
 
 const conversationRoutes = new Hono<{ Bindings: Bindings }>()
 
-// Conversations & Contact List (WhatsApp Style)
+function resolveOtherUser(row: any, viewer: any, shopHandle: string, shopDisplayName: string) {
+  const viewerHandle = (viewer?.handle || '').toLowerCase().replace(/^@/, '')
+  const viewerId = viewer?.id || ''
+  const userBHandle = (row.remote_handle || row.user_b || '').toLowerCase().replace(/^@/, '')
+  const userBId = row.user_b || ''
+
+  // Is the viewer the customer / user_b?
+  const isCustomerViewer = Boolean(
+    viewer &&
+    (viewerHandle === userBHandle || (viewerId && viewerId === userBId))
+  )
+
+  if (isCustomerViewer) {
+    // Other participant is the business merchant / shop
+    return {
+      id: row.user_a,
+      username: shopHandle,
+      displayName: shopDisplayName || `@${shopHandle}`,
+    }
+  }
+
+  // Other participant is the customer / remote peer
+  return {
+    id: row.user_b,
+    username: row.remote_handle || row.user_b,
+    displayName: row.remote_handle ? `@${row.remote_handle}` : row.user_b,
+  }
+}
+
+// Conversations & Contact List (WhatsApp Style, Bidirectionally Resolved)
 conversationRoutes.get('/api/conversations', async (c) => {
   const db = c.env?.DB
 
   if (db) {
+    await ensureD1Database(db)
+  }
+
+  const authHeader = c.req.header('Authorization') || ''
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  let viewer: any = null
+  if (token) {
+    viewer = await validateSession(token, db)
+  }
+
+  const adminUser = memoryStore.users.get('usr_admin')
+  let shopHandle = adminUser?.handle || 'admin'
+  let shopDisplayName = memoryStore.config.get('display_name') || 'Chatze Shop'
+  let accountType = memoryStore.config.get('account_type') || 'personal'
+
+  if (db) {
     try {
-      await ensureD1Database(db)
-      const convRows: any = await db.prepare('SELECT * FROM conversations ORDER BY last_message_at DESC LIMIT 100').all()
+      const aRow: any = await db.prepare("SELECT handle, display_name FROM users WHERE role = 'admin' LIMIT 1").first()
+      if (aRow?.handle) shopHandle = aRow.handle
+      const sRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'display_name'").first()
+      if (sRow?.value) shopDisplayName = sRow.value
+      else if (aRow?.display_name) shopDisplayName = aRow.display_name
+      const tRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'account_type'").first()
+      if (tRow?.value) accountType = tRow.value
+    } catch {}
+  }
+
+  const viewerHandle = (viewer?.handle || '').toLowerCase().replace(/^@/, '')
+  const viewerId = viewer?.id || ''
+  const isBusinessOwner = accountType === 'business' && (!viewer || viewer.role === 'admin' || viewer.id === adminUser?.id)
+
+  if (db) {
+    try {
+      let query = 'SELECT * FROM conversations ORDER BY last_message_at DESC LIMIT 100'
+      let params: any[] = []
+
+      // If viewer is a customer, only show conversations they participate in
+      if (!isBusinessOwner && (viewerHandle || viewerId)) {
+        query = 'SELECT * FROM conversations WHERE user_b = ? OR user_b = ? OR remote_handle = ? ORDER BY last_message_at DESC LIMIT 100'
+        params = [viewerId, viewerHandle, viewerHandle]
+      }
+
+      const convRows: any = await db.prepare(query).bind(...params).all()
       if (convRows?.results) {
         const mapped = convRows.results.map((row: any) => ({
           id: row.id,
-          otherUser: {
-            id: row.user_b,
-            username: row.remote_handle || row.user_b,
-            displayName: row.remote_handle ? `@${row.remote_handle}` : row.user_b,
-          },
+          otherUser: resolveOtherUser(row, viewer, shopHandle, shopDisplayName),
           status: row.status,
           remoteInstanceUrl: row.remote_instance_url || null,
           lastMessage: row.last_message_snippet
@@ -37,31 +102,25 @@ conversationRoutes.get('/api/conversations', async (c) => {
     }
   }
 
-  const convList = Array.from(memoryStore.conversations.values())
+  const allConvs = Array.from(memoryStore.conversations.values())
+  const filtered = !isBusinessOwner && (viewerHandle || viewerId)
+    ? allConvs.filter((c) => c.user_b === viewerId || c.user_b === viewerHandle || c.remote_handle === viewerHandle)
+    : allConvs
+
+  const convList = filtered
     .sort((a, b) => b.last_message_at - a.last_message_at)
-    .map((conv) => {
-      const otherUser = memoryStore.users.get(conv.user_b) || {
-        id: conv.user_b,
-        handle: conv.remote_handle || conv.user_b,
-        display_name: conv.remote_handle ? `@${conv.remote_handle}` : conv.user_b,
-      }
-      return {
-        id: conv.id,
-        otherUser: {
-          id: otherUser.id,
-          username: otherUser.handle,
-          displayName: otherUser.display_name,
-        },
-        status: conv.status,
-        remoteInstanceUrl: conv.remote_instance_url || null,
-        lastMessage: conv.last_message_snippet
-          ? {
-              content: conv.last_message_snippet,
-              createdAt: conv.last_message_at,
-            }
-          : null,
-      }
-    })
+    .map((conv) => ({
+      id: conv.id,
+      otherUser: resolveOtherUser(conv, viewer, shopHandle, shopDisplayName),
+      status: conv.status,
+      remoteInstanceUrl: conv.remote_instance_url || null,
+      lastMessage: conv.last_message_snippet
+        ? {
+            content: conv.last_message_snippet,
+            createdAt: conv.last_message_at,
+          }
+        : null,
+    }))
 
   return c.json({ conversations: convList })
 })
@@ -72,19 +131,48 @@ conversationRoutes.get('/api/sync', async (c) => {
   const conversationId = c.req.query('conversationId') || ''
   const db = c.env?.DB
 
+  if (db) {
+    await ensureD1Database(db)
+  }
+
+  const authHeader = c.req.header('Authorization') || ''
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  let viewer: any = null
+  if (token) {
+    viewer = await validateSession(token, db)
+  }
+
+  const adminUser = memoryStore.users.get('usr_admin')
+  let shopHandle = adminUser?.handle || 'admin'
+  let shopDisplayName = memoryStore.config.get('display_name') || 'Chatze Shop'
+  let accountType = memoryStore.config.get('account_type') || 'personal'
+
+  if (db) {
+    try {
+      const aRow: any = await db.prepare("SELECT handle, display_name FROM users WHERE role = 'admin' LIMIT 1").first()
+      if (aRow?.handle) shopHandle = aRow.handle
+      const sRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'display_name'").first()
+      if (sRow?.value) shopDisplayName = sRow.value
+      else if (aRow?.display_name) shopDisplayName = aRow.display_name
+      const tRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'account_type'").first()
+      if (tRow?.value) accountType = tRow.value
+    } catch {}
+  }
+
+  const viewerHandle = (viewer?.handle || '').toLowerCase().replace(/^@/, '')
+  const viewerId = viewer?.id || ''
+  const isBusinessOwner = accountType === 'business' && (!viewer || viewer.role === 'admin' || viewer.id === adminUser?.id)
+
   let newMessages: any[] = []
   let friendships: any[] = []
   let conversations: any[] = []
 
   if (db) {
     try {
-      await ensureD1Database(db)
       if (conversationId) {
         let reverseConvId = conversationId
         if (conversationId.startsWith('conv_')) {
-          const adminUser = memoryStore.users.get('usr_admin')
-          const adminHandle = adminUser?.handle || 'admin'
-          reverseConvId = 'conv_' + adminHandle
+          reverseConvId = 'conv_' + shopHandle
         }
         const msgRows: any = await db.prepare(
           'SELECT * FROM messages WHERE (conversation_id = ? OR conversation_id = ?) AND created_at > ? ORDER BY created_at ASC LIMIT 50'
@@ -111,15 +199,18 @@ conversationRoutes.get('/api/sync', async (c) => {
       const fRows: any = await db.prepare('SELECT * FROM federation_friendships ORDER BY created_at DESC LIMIT 50').all()
       if (fRows?.results) friendships = fRows.results
 
-      const cRows: any = await db.prepare('SELECT * FROM conversations ORDER BY last_message_at DESC LIMIT 50').all()
+      let convQuery = 'SELECT * FROM conversations ORDER BY last_message_at DESC LIMIT 50'
+      let convParams: any[] = []
+      if (!isBusinessOwner && (viewerHandle || viewerId)) {
+        convQuery = 'SELECT * FROM conversations WHERE user_b = ? OR user_b = ? OR remote_handle = ? ORDER BY last_message_at DESC LIMIT 50'
+        convParams = [viewerId, viewerHandle, viewerHandle]
+      }
+
+      const cRows: any = await db.prepare(convQuery).bind(...convParams).all()
       if (cRows?.results) {
         conversations = cRows.results.map((row: any) => ({
           id: row.id,
-          otherUser: {
-            id: row.user_b,
-            username: row.remote_handle || row.user_b,
-            displayName: row.remote_handle ? `@${row.remote_handle}` : row.user_b,
-          },
+          otherUser: resolveOtherUser(row, viewer, shopHandle, shopDisplayName),
           status: row.status,
           remoteInstanceUrl: row.remote_instance_url || null,
           lastMessage: row.last_message_snippet
@@ -152,15 +243,16 @@ conversationRoutes.get('/api/sync', async (c) => {
     }))
 
   const memFriendships = Array.from(memoryStore.friendships.values()).sort((a, b) => b.created_at - a.created_at)
-  const memConvs = Array.from(memoryStore.conversations.values())
+  const allMemConvs = Array.from(memoryStore.conversations.values())
+  const filteredMemConvs = !isBusinessOwner && (viewerHandle || viewerId)
+    ? allMemConvs.filter((c) => c.user_b === viewerId || c.user_b === viewerHandle || c.remote_handle === viewerHandle)
+    : allMemConvs
+
+  const memConvs = filteredMemConvs
     .sort((a, b) => b.last_message_at - a.last_message_at)
     .map((conv) => ({
       id: conv.id,
-      otherUser: {
-        id: conv.user_b,
-        username: conv.remote_handle || conv.user_b,
-        displayName: conv.remote_handle ? `@${conv.remote_handle}` : conv.user_b,
-      },
+      otherUser: resolveOtherUser(conv, viewer, shopHandle, shopDisplayName),
       status: conv.status,
       remoteInstanceUrl: conv.remote_instance_url || null,
       lastMessage: conv.last_message_snippet

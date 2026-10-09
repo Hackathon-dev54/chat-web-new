@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { ensureD1Database } from '../db'
-import { memoryStore, broadcastAllStreams } from '../store'
+import { memoryStore, broadcastAllStreams, validateSession } from '../store'
 import { extractRootDomain } from '../domain'
 import { sendPushNotification } from '../webpush'
 import type { Bindings, MemInquiry, MemConversation, MemMessage, MemFriendship } from '../types'
@@ -11,11 +11,23 @@ const inquiryRoutes = new Hono<{ Bindings: Bindings }>()
 // The Static Letterbox: 1-Card Customer Inquiry Drop API
 // ============================================================================
 
-// Customer drops 1 note into the shop's Letterbox (Zero-Flood Guarantee)
+// Customer drops 1 note into the shop's Letterbox (Zero-Flood Guarantee & Zero Invocations on Receiver)
 inquiryRoutes.post('/api/inquiries', async (c) => {
   try {
+    const db = c.env?.DB
+    if (db) {
+      await ensureD1Database(db)
+    }
+
+    const authHeader = c.req.header('Authorization') || ''
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+    let authedUser: any = null
+    if (token) {
+      authedUser = await validateSession(token, db)
+    }
+
     const body = await c.req.json()
-    const { shopHandle, senderName, senderHandle, senderOriginUrl, content, contactPhone, category } = body
+    const { shopHandle, senderName, senderHandle, senderUserId, senderOriginUrl, content, contactPhone, category } = body
 
     const cleanContent = (content || '').trim()
     if (!cleanContent) {
@@ -34,22 +46,19 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       formattedContent = `${formattedContent} • 📞 ${contactPhone.trim()}`
     }
 
-    const cleanSenderName = (senderName || 'Nepali Shopper').trim()
-    const cleanSenderHandle = (senderHandle || 'guest_' + Math.random().toString(36).slice(2, 7))
+    // Authenticated identity binding: If user is logged in, bind verified identity
+    const cleanSenderUserId = authedUser?.id || senderUserId || null
+    const cleanSenderName = (authedUser?.display_name || senderName || 'Customer').trim()
+    const cleanSenderHandle = (authedUser?.handle || senderHandle || (senderUserId ? 'user_' + senderUserId.slice(-5) : 'guest_' + Math.random().toString(36).slice(2, 7)))
       .replace(/^@/, '')
       .trim()
       .toLowerCase()
 
     const origin = senderOriginUrl || c.req.header('origin') || c.req.header('referer') || 'direct-client'
     const rootDomain = extractRootDomain(origin)
-    const db = c.env?.DB
     const now = Date.now()
 
-    if (db) {
-      await ensureD1Database(db)
-    }
-
-    // 1. Check if root domain is blacklisted
+    // Gate 1: Check if root domain is blacklisted
     let isBlocked = memoryStore.blockedDomains.has(rootDomain)
     if (db && !isBlocked) {
       try {
@@ -61,7 +70,7 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       return c.json({ error: 'Submissions from your origin domain are blocked by this shop.' }, 403)
     }
 
-    // 2. Check if shop is in business mode and letterbox is enabled
+    // Gate 2: Check if shop is in business mode and letterbox is enabled
     let letterboxEnabled = memoryStore.config.get('inquiry_letterbox_enabled') !== 'false'
     let accountType = memoryStore.config.get('account_type') || 'personal'
     if (db) {
@@ -81,19 +90,24 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       return c.json({ error: 'The shop owner has temporarily closed customer inquiries.' }, 403)
     }
 
-    // 3. The 1-Card Gate (Strict Deduplication per Root Domain / Handle)
+    // Gate 3: The 1-Card Gate (Strict Deduplication per User / Handle / Domain)
     let alreadyHasPending = false
     for (const [, inq] of memoryStore.inquiries) {
-      if ((inq.sender_root_domain === rootDomain || inq.sender_handle === cleanSenderHandle) && inq.status === 'pending') {
-        alreadyHasPending = true
-        break
+      if (inq.status === 'pending') {
+        const matchHandle = inq.sender_handle === cleanSenderHandle
+        const matchUser = cleanSenderUserId && inq.sender_user_id === cleanSenderUserId
+        const matchDomain = !cleanSenderUserId && inq.sender_root_domain === rootDomain
+        if (matchHandle || matchUser || matchDomain) {
+          alreadyHasPending = true
+          break
+        }
       }
     }
     if (db && !alreadyHasPending) {
       try {
         const existingRow: any = await db.prepare(
-          "SELECT id FROM static_inquiries WHERE (sender_root_domain = ? OR sender_handle = ?) AND status = 'pending' LIMIT 1"
-        ).bind(rootDomain, cleanSenderHandle).first()
+          "SELECT id FROM static_inquiries WHERE (sender_handle = ? OR (sender_user_id IS NOT NULL AND sender_user_id = ?) OR (? IS NULL AND sender_root_domain = ?)) AND status = 'pending' LIMIT 1"
+        ).bind(cleanSenderHandle, cleanSenderUserId || '', cleanSenderUserId, rootDomain).first()
         if (existingRow) alreadyHasPending = true
       } catch {}
     }
@@ -105,7 +119,7 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       }, 429)
     }
 
-    // 4. Queue Capacity Check (Max 20 pending inquiries per shop)
+    // Gate 4: Queue Capacity Check (Max 20 pending inquiries per shop)
     let pendingCount = 0
     if (db) {
       try {
@@ -123,14 +137,16 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       }, 429)
     }
 
-    // 5. Store the 1-Card Note
+    // Gate 5: Store the 1-Card Note (Bound to real account if authenticated)
     const inquiryId = 'inq_' + Math.random().toString(36).slice(2, 9)
     const inquiryRecord: MemInquiry = {
       id: inquiryId,
       sender_handle: cleanSenderHandle,
       sender_name: cleanSenderName,
+      sender_user_id: cleanSenderUserId || undefined,
       sender_root_domain: rootDomain,
       sender_origin_url: origin,
+      category: category ? category.trim() : undefined,
       content: formattedContent,
       status: 'pending',
       created_at: now,
@@ -141,14 +157,14 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
     if (db) {
       try {
         await db.prepare(
-          'INSERT INTO static_inquiries (id, sender_handle, sender_name, sender_root_domain, sender_origin_url, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, "pending", ?)'
-        ).bind(inquiryId, cleanSenderHandle, cleanSenderName, rootDomain, origin, formattedContent, now).run()
+          'INSERT INTO static_inquiries (id, sender_handle, sender_name, sender_user_id, sender_root_domain, sender_origin_url, category, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, "pending", ?)'
+        ).bind(inquiryId, cleanSenderHandle, cleanSenderName, cleanSenderUserId, rootDomain, origin, category?.trim() || null, formattedContent, now).run()
       } catch (d1Err: any) {
         console.warn('[D1 Inquiry Insert Warning]', d1Err?.message)
       }
     }
 
-    // 6. Broadcast event & Push notification to shop owner
+    // Broadcast event & Push notification to shop owner (0 compute invocations on receiver)
     await broadcastAllStreams('new_customer_inquiry', inquiryRecord, c.env)
 
     try {
@@ -163,6 +179,9 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
     return c.json({
       success: true,
       inquiryId,
+      senderHandle: cleanSenderHandle,
+      senderName: cleanSenderName,
+      senderUserId: cleanSenderUserId,
       message: 'Your inquiry note has been safely placed in the shop letterbox!',
     }, 201)
   } catch (err: any) {
@@ -170,23 +189,59 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
   }
 })
 
-// Shop owner gets inquiries list
+// Inquiries list: Business owner gets shop's inbox; Private customer gets their sent notes
 inquiryRoutes.get('/api/inquiries', async (c) => {
   const db = c.env?.DB
+  if (db) {
+    await ensureD1Database(db)
+  }
+
+  const authHeader = c.req.header('Authorization') || ''
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+  let authedUser: any = null
+  if (token) {
+    authedUser = await validateSession(token, db)
+  }
+
+  const queryHandle = c.req.query('handle')?.replace(/^@/, '').toLowerCase()
+  const queryUserId = c.req.query('userId')
+  const effectiveHandle = authedUser?.handle || queryHandle || null
+  const effectiveUserId = authedUser?.id || queryUserId || null
+
+  let accountType = memoryStore.config.get('account_type') || 'personal'
+  if (db) {
+    try {
+      const aRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'account_type'").first()
+      if (aRow) accountType = aRow.value
+    } catch {}
+  }
+
+  const isBusinessOwner = accountType === 'business' && (!authedUser || authedUser.role === 'admin')
   let list: any[] = []
 
   if (db) {
     try {
-      await ensureD1Database(db)
-      const { results } = await db.prepare('SELECT * FROM static_inquiries ORDER BY created_at DESC LIMIT 50').all()
-      if (Array.isArray(results)) list = results
+      if (isBusinessOwner) {
+        const { results } = await db.prepare('SELECT * FROM static_inquiries ORDER BY created_at DESC LIMIT 50').all()
+        if (Array.isArray(results)) list = results
+      } else if (effectiveHandle || effectiveUserId) {
+        const { results } = await db.prepare(
+          'SELECT * FROM static_inquiries WHERE sender_handle = ? OR sender_user_id = ? ORDER BY created_at DESC LIMIT 50'
+        ).bind(effectiveHandle || '', effectiveUserId || '').all()
+        if (Array.isArray(results)) list = results
+      }
     } catch (e: any) {
       console.warn('[D1 Inquiries Fetch Warning]', e?.message)
     }
   }
 
   if (list.length === 0) {
-    list = Array.from(memoryStore.inquiries.values()).sort((a, b) => b.created_at - a.created_at)
+    const all = Array.from(memoryStore.inquiries.values()).sort((a, b) => b.created_at - a.created_at)
+    if (isBusinessOwner) {
+      list = all
+    } else if (effectiveHandle || effectiveUserId) {
+      list = all.filter((i) => i.sender_handle === effectiveHandle || (effectiveUserId && i.sender_user_id === effectiveUserId))
+    }
   }
 
   const pendingCount = list.filter((i) => i.status === 'pending').length
@@ -194,10 +249,11 @@ inquiryRoutes.get('/api/inquiries', async (c) => {
   return c.json({
     inquiries: list,
     pendingCount,
+    isBusinessOwner,
   })
 })
 
-// Shop owner replies / accepts inquiry (Unlocks full 2-way chat as Letterbox Customer Chat)
+// Shop owner replies / accepts inquiry (Dual-Channel Workflow: 'letterbox' or 'active' friend)
 inquiryRoutes.post('/api/inquiries/reply', async (c) => {
   try {
     const { inquiryId, asFriend } = await c.req.json()
@@ -225,11 +281,28 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
     const messageId = 'msg_' + Math.random().toString(36).slice(2, 9)
     const convStatus = asFriend ? 'active' : 'letterbox'
 
+    // Admin user details
+    let adminId = 'usr_admin'
+    let adminHandle = 'admin'
+    const adminUser = memoryStore.users.get('usr_admin')
+    if (adminUser) {
+      adminId = adminUser.id
+      adminHandle = adminUser.handle
+    } else if (db) {
+      try {
+        const aRow: any = await db.prepare("SELECT id, handle FROM users WHERE role = 'admin' LIMIT 1").first()
+        if (aRow) {
+          adminId = aRow.id
+          adminHandle = aRow.handle
+        }
+      } catch {}
+    }
+
     // Create conversation record
     const convRecord: MemConversation = {
       id: conversationId,
-      user_a: 'usr_admin',
-      user_b: inquiry.sender_handle,
+      user_a: adminId,
+      user_b: inquiry.sender_user_id || inquiry.sender_handle,
       remote_handle: inquiry.sender_handle,
       remote_instance_url: inquiry.sender_origin_url,
       last_message_snippet: inquiry.content,
@@ -238,7 +311,7 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
     }
     memoryStore.conversations.set(conversationId, convRecord)
 
-    // Store inquiry message as first message
+    // Store inquiry note content as the opening message
     const msgRecord: MemMessage = {
       id: messageId,
       conversation_id: conversationId,
@@ -249,13 +322,13 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
     }
     memoryStore.messages.push(msgRecord)
 
-    // If asFriend was chosen, also create friendship record
+    // If asFriend was chosen, also create friendship record (promoting customer to peer friend)
     let friendshipRecord: MemFriendship | null = null
     if (asFriend) {
       const friendshipId = 'fr_priv_' + Math.random().toString(36).slice(2, 9)
       friendshipRecord = {
         id: friendshipId,
-        local_user_id: 'usr_admin',
+        local_user_id: adminId,
         remote_handle: inquiry.sender_handle,
         remote_instance_url: inquiry.sender_origin_url,
         status: 'active',
@@ -274,15 +347,25 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
           .bind(msgRecord.id, msgRecord.conversation_id, msgRecord.sender_id, msgRecord.content, now, now).run()
         if (friendshipRecord) {
           await db.prepare('INSERT OR REPLACE INTO federation_friendships (id, local_user_id, remote_handle, remote_instance_url, status, direction, created_at) VALUES (?, ?, ?, ?, "active", "outgoing", ?)')
-            .bind(friendshipRecord.id, 'usr_admin', inquiry.sender_handle, inquiry.sender_origin_url, now).run()
+            .bind(friendshipRecord.id, adminId, inquiry.sender_handle, inquiry.sender_origin_url, now).run()
         }
       } catch (d1Err: any) {
         console.warn('[D1 Reply Convert Warning]', d1Err?.message)
       }
     }
 
+    // Broadcast SSE updates to both business owner and customer in real-time
     await broadcastAllStreams('conversation_updated', convRecord, c.env)
-    await broadcastAllStreams('inquiry_status_updated', { inquiryId, status: 'accepted' }, c.env)
+    await broadcastAllStreams('inquiry_status_updated', { inquiryId, status: 'accepted', conversationId }, c.env)
+    await broadcastAllStreams('new_message', {
+      id: messageId,
+      conversationId: conversationId,
+      senderId: inquiry.sender_handle,
+      senderHandle: inquiry.sender_handle,
+      recipientHandle: adminHandle,
+      body: inquiry.content,
+      createdAt: new Date(now).toISOString(),
+    }, c.env)
 
     return c.json({
       success: true,

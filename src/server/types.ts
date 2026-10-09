@@ -72,8 +72,10 @@ export interface MemInquiry {
   id: string
   sender_handle: string
   sender_name: string
+  sender_user_id?: string
   sender_root_domain: string
   sender_origin_url: string
+  category?: string
   content: string
   status: 'pending' | 'accepted' | 'dismissed'
   created_at: number
