@@ -143,8 +143,19 @@ messagingRoutes.post('/api/messaging', async (c) => {
       console.warn('[Push Notification Error]', e?.message)
     }
 
+    const currentOrigin = c.req.header('origin') || c.req.header('host') || ''
+    const currentDomain = extractRootDomain(currentOrigin)
     const targetUrl = remoteInstanceUrl || memoryStore.conversations.get(conversationId)?.remote_instance_url
-    if (targetUrl) {
+    
+    // Only forward if targetUrl is a valid external URL and not the current instance domain
+    const isTargetExternal = Boolean(
+      targetUrl &&
+      targetUrl !== 'direct-client' &&
+      !targetUrl.includes('direct-client') &&
+      (!currentDomain || !targetUrl.includes(currentDomain))
+    )
+
+    if (isTargetExternal && targetUrl) {
       let senderHandle = myHandle || ''
       if (db && !senderHandle) {
         try {
@@ -209,10 +220,26 @@ messagingRoutes.post('/api/federation/v1/messages', async (c) => {
       created_at: now,
       read_at: null,
     })
-    const conv = memoryStore.conversations.get(conversationId)
-    if (conv) {
+
+    let conv = memoryStore.conversations.get(conversationId)
+    if (!conv) {
+      conv = {
+        id: conversationId,
+        user_a: 'usr_admin',
+        user_b: cleanSender,
+        remote_handle: cleanSender,
+        remote_instance_url: null,
+        last_message_snippet: messageRecord.body,
+        last_message_at: now,
+        status: 'active',
+      }
+      memoryStore.conversations.set(conversationId, conv)
+    } else {
       conv.last_message_snippet = messageRecord.body
       conv.last_message_at = now
+      if (conv.status === 'pending') {
+        conv.status = 'active'
+      }
     }
 
     const db = c.env?.DB
@@ -221,13 +248,14 @@ messagingRoutes.post('/api/federation/v1/messages', async (c) => {
         await ensureD1Database(db)
         await db.prepare('INSERT INTO messages (id, conversation_id, sender_id, content, created_at, read_at) VALUES (?, ?, ?, ?, ?, NULL)')
           .bind(messageRecord.id, messageRecord.conversationId, messageRecord.senderId, messageRecord.body, now).run()
-        await db.prepare('UPDATE conversations SET last_message_snippet = ?, last_message_at = ? WHERE id = ?')
-          .bind(messageRecord.body, now, conversationId).run()
+        await db.prepare('INSERT OR REPLACE INTO conversations (id, user_a, user_b, remote_handle, remote_instance_url, last_message_snippet, last_message_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, "active")')
+          .bind(conversationId, 'usr_admin', cleanSender, cleanSender, conv.remote_instance_url || null, messageRecord.body, now).run()
       } catch (d1Err: any) {
         console.warn('[D1 Peer Inbound Message Warning]', d1Err?.message)
       }
     }
 
+    await broadcastAllStreams('conversation_updated', conv, c.env)
     await broadcastAllStreams('new_message', messageRecord, c.env)
 
     // Web Push background alert for inbound peer message (asynchronous, never blocks HTTP response)

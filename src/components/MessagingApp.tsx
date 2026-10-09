@@ -24,6 +24,11 @@ import {
   Loader2,
   Settings,
   Store,
+  ExternalLink,
+  Check,
+  Phone,
+  Shield,
+  UserCheck,
 } from 'lucide-react'
 import {
   getLocalMessages,
@@ -209,12 +214,15 @@ export function MessagingApp({
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [inputText, setInputText] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [inboxFilter, setInboxFilter] = useState<'all' | 'unread' | 'pending' | 'inquiries'>('all')
+  const [inboxFilter, setInboxFilter] = useState<'all' | 'unread' | 'pending' | 'friends' | 'letterbox' | 'inquiries'>('all')
   const [accountType, setAccountType] = useState<'personal' | 'business'>('personal')
   const [inquiries, setInquiries] = useState<any[]>([])
   const [pendingInquiryCount, setPendingInquiryCount] = useState<number>(0)
   const [friendPinInput, setFriendPinInput] = useState('')
   const [replyingInquiryId, setReplyingInquiryId] = useState<string | null>(null)
+  const [copiedShopLink, setCopiedShopLink] = useState(false)
+  const [inquiryActionToast, setInquiryActionToast] = useState<string | null>(null)
+  const [myFriendPin, setMyFriendPin] = useState('')
 
   // Federation & Contacts
   const [friendships, setFriendships] = useState<Friendship[]>([])
@@ -785,6 +793,7 @@ export function MessagingApp({
       .then((data) => {
         if (data.profile) {
           setAccountType(data.profile.accountType || 'personal')
+          if (data.profile.friendPin) setMyFriendPin(data.profile.friendPin)
           if (data.profile.accountType === 'business') {
             fetchInquiries()
           }
@@ -942,19 +951,25 @@ export function MessagingApp({
     } catch {}
   }
 
-  const handleReplyInquiry = async (inquiryId: string) => {
+  const handleReplyInquiry = async (inquiryId: string, asFriend = false) => {
     setReplyingInquiryId(inquiryId)
     try {
       const res = await fetch('/api/inquiries/reply', {
         method: 'POST',
         headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ inquiryId }),
+        body: JSON.stringify({ inquiryId, asFriend }),
       })
       const data = await res.json()
       if (res.ok && data.success) {
         await fetchInquiries()
         runSync()
         setInboxFilter('all')
+        setInquiryActionToast(
+          asFriend
+            ? 'Inquiry accepted as Private Friend! Conversation unlocked.'
+            : 'Inquiry accepted as Letterbox Customer Chat! Ready to chat.'
+        )
+        setTimeout(() => setInquiryActionToast(null), 3500)
       } else {
         alert(data.error || 'Failed to reply to inquiry')
       }
@@ -976,6 +991,39 @@ export function MessagingApp({
         await fetchInquiries()
       }
     } catch {}
+  }
+
+  // Business owner manually adds the inquirer as a private friend directly
+  const handleAddFriendFromInquiry = async (inquiryId: string) => {
+    return handleReplyInquiry(inquiryId, true)
+  }
+
+  const shopPortfolioUrl = typeof window !== 'undefined' ? `${window.location.origin}/shop` : ''
+
+  const handleCopyShopUrl = () => {
+    if (!shopPortfolioUrl) return
+    navigator.clipboard.writeText(shopPortfolioUrl)
+    setCopiedShopLink(true)
+    setInquiryActionToast('Portfolio & Letterbox link copied! Share with customers.')
+    setTimeout(() => {
+      setCopiedShopLink(false)
+      setInquiryActionToast(null)
+    }, 3500)
+  }
+
+  const handleShareShopUrl = async () => {
+    if (!shopPortfolioUrl) return
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `${currentDisplayName} • Chatze Nepal`,
+          text: `Check out our business portfolio and send customer inquiries directly:`,
+          url: shopPortfolioUrl,
+        })
+      } catch {}
+    } else {
+      handleCopyShopUrl()
+    }
   }
 
   // Send Message (0ms Optimistic + Single POST request, ZERO GET requests!)
@@ -1051,6 +1099,8 @@ export function MessagingApp({
       if (!matchesSearch) return false
       if (inboxFilter === 'pending') return c.status === 'pending'
       if (inboxFilter === 'unread') return (c.unreadCount || 0) > 0
+      if (inboxFilter === 'friends') return c.status !== 'letterbox'
+      if (inboxFilter === 'letterbox') return c.status === 'letterbox'
       return true
     })
   }, [conversations, searchQuery, inboxFilter])
@@ -1121,6 +1171,66 @@ export function MessagingApp({
             </div>
           </div>
 
+          {/* Dedicated Business Letterbox & Portfolio Share Card */}
+          {accountType === 'business' && (
+            <div className="p-3 bg-gradient-to-br from-purple-950/40 via-[#111b21] to-[#00a884]/10 border border-purple-500/30 rounded-2xl space-y-2 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Store className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="font-bold text-xs text-[#e9edef]">Public Letterbox & Portfolio</span>
+                </div>
+                <span className="text-[10px] bg-purple-500/20 text-purple-300 font-bold px-2 py-0.5 rounded-full border border-purple-500/30">
+                  Share Hub
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5 bg-[#0b141a] p-1.5 rounded-xl border border-[#202c33]">
+                <Globe className="w-3.5 h-3.5 text-[#8696a0] shrink-0 ml-1" />
+                <span className="text-[11px] font-mono text-[#8696a0] truncate flex-1 select-all">
+                  {shopPortfolioUrl ? shopPortfolioUrl.replace(/^https?:\/\//, '') : '/shop'}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopyShopUrl}
+                  title="Copy Customer Share Link"
+                  className="px-2 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#e9edef] rounded-lg text-[11px] font-semibold flex items-center gap-1 transition-colors shrink-0 cursor-pointer"
+                >
+                  {copiedShopLink ? <Check className="w-3 h-3 text-[#00a884]" /> : <Copy className="w-3 h-3 text-[#8696a0]" />}
+                  <span>{copiedShopLink ? 'Copied' : 'Copy'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShareShopUrl}
+                  title="Share link"
+                  className="p-1 text-[#8696a0] hover:text-[#00a884] hover:bg-[#202c33] rounded-lg transition-colors cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                </button>
+                <a
+                  href="/shop"
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open Customer Landing Page"
+                  className="p-1 text-[#8696a0] hover:text-[#00a884] hover:bg-[#202c33] rounded-lg transition-colors cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+
+              <div className="flex items-center justify-between text-[10px] text-[#8696a0]">
+                <span className="flex items-center gap-1 text-amber-400">
+                  <Shield className="w-3 h-3" /> Friend Requests: Private Only
+                </span>
+                <button
+                  onClick={() => setInboxFilter('inquiries')}
+                  className="text-purple-400 font-semibold hover:underline cursor-pointer"
+                >
+                  Letterbox ({inquiries.length})
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Connect Contact Button */}
           <button
             onClick={() => setShowAddFriendModal(true)}
@@ -1149,15 +1259,34 @@ export function MessagingApp({
                 inboxFilter === 'all' ? 'bg-[#202c33] text-[#e9edef]' : 'text-[#8696a0] hover:text-[#e9edef]'
               }`}
             >
-              All ({conversations.length})
+              All
             </button>
             <button
-              onClick={() => setInboxFilter('pending')}
+              onClick={() => setInboxFilter('friends')}
               className={`flex-1 py-1 rounded-lg font-medium transition-all ${
-                inboxFilter === 'pending' ? 'bg-[#202c33] text-amber-400' : 'text-[#8696a0] hover:text-[#e9edef]'
+                inboxFilter === 'friends' ? 'bg-[#202c33] text-[#00a884]' : 'text-[#8696a0] hover:text-[#e9edef]'
               }`}
             >
-              Pending ({conversations.filter((c) => c.status === 'pending').length})
+              Friends
+            </button>
+            <button
+              onClick={() => setInboxFilter(accountType === 'business' ? 'inquiries' : 'letterbox')}
+              className={`flex-1 py-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 ${
+                inboxFilter === 'inquiries' || inboxFilter === 'letterbox'
+                  ? 'bg-[#202c33] text-purple-400 font-bold'
+                  : 'text-[#8696a0] hover:text-[#e9edef]'
+              }`}
+            >
+              <span>Letterbox</span>
+              {accountType === 'business' && pendingInquiryCount > 0 ? (
+                <span className="w-4 h-4 rounded-full bg-purple-500 text-white font-bold text-[9px] flex items-center justify-center">
+                  {pendingInquiryCount}
+                </span>
+              ) : (
+                conversations.some((c) => c.status === 'letterbox') && (
+                  <span className="w-2 h-2 rounded-full bg-purple-400"></span>
+                )
+              )}
             </button>
             <button
               onClick={() => setInboxFilter('unread')}
@@ -1167,21 +1296,6 @@ export function MessagingApp({
             >
               Unread
             </button>
-            {accountType === 'business' && (
-              <button
-                onClick={() => setInboxFilter('inquiries')}
-                className={`flex-1 py-1 rounded-lg font-medium transition-all flex items-center justify-center gap-1 ${
-                  inboxFilter === 'inquiries' ? 'bg-[#202c33] text-purple-400 font-bold' : 'text-[#8696a0] hover:text-[#e9edef]'
-                }`}
-              >
-                <span>Letterbox</span>
-                {pendingInquiryCount > 0 && (
-                  <span className="w-4 h-4 rounded-full bg-purple-500 text-white font-bold text-[9px] flex items-center justify-center">
-                    {pendingInquiryCount}
-                  </span>
-                )}
-              </button>
-            )}
           </div>
         </div>
 
@@ -1272,27 +1386,53 @@ export function MessagingApp({
                     </div>
 
                     {inq.status === 'pending' && (
-                      <div className="flex items-center gap-1.5 pt-1">
-                        <button
-                          onClick={() => handleReplyInquiry(inq.id)}
-                          disabled={replyingInquiryId === inq.id}
-                          className="flex-1 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50"
-                        >
-                          {replyingInquiryId === inq.id ? 'Opening Chat...' : 'Reply & Open Chat'}
-                        </button>
-                        <button
-                          onClick={() => handleDismissInquiry(inq.id, false)}
-                          className="px-2.5 py-1.5 bg-[#202c33] hover:bg-[#2a3942] text-[#8696a0] rounded-lg text-xs transition-all cursor-pointer"
-                        >
-                          Dismiss
-                        </button>
-                        <button
-                          onClick={() => handleDismissInquiry(inq.id, true)}
-                          title="Block this root domain permanently"
-                          className="px-2 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-xs transition-all cursor-pointer"
-                        >
-                          Block
-                        </button>
+                      <div className="space-y-2 pt-1">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleReplyInquiry(inq.id, false)}
+                            disabled={replyingInquiryId === inq.id}
+                            title="Accept inquiry as a separate Letterbox customer inquiry chat"
+                            className="flex-1 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 shadow-sm"
+                          >
+                            <Store className="w-3.5 h-3.5" />
+                            <span>{replyingInquiryId === inq.id ? 'Opening...' : 'Accept as Letterbox'}</span>
+                          </button>
+                          <button
+                            onClick={() => handleReplyInquiry(inq.id, true)}
+                            disabled={replyingInquiryId === inq.id}
+                            title="Accept inquiry and add customer as a trusted Private Friend"
+                            className="flex-1 py-1.5 bg-purple-600/25 hover:bg-purple-600/35 border border-purple-500/40 text-purple-200 font-bold rounded-lg text-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                          >
+                            <UserCheck className="w-3.5 h-3.5 text-purple-300" />
+                            <span>Accept as Friend</span>
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 justify-end">
+                          {inq.content.includes('📞') && (
+                            <a
+                              href={`tel:${inq.content.split('📞')[1]?.split('•')[0]?.trim() || ''}`}
+                              className="px-2.5 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#00a884] rounded-lg text-[11px] flex items-center gap-1 font-semibold mr-auto cursor-pointer"
+                              title="Call customer directly"
+                            >
+                              <Phone className="w-3 h-3" />
+                              <span>Call</span>
+                            </a>
+                          )}
+                          <button
+                            onClick={() => handleDismissInquiry(inq.id, false)}
+                            className="px-2.5 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#8696a0] rounded-lg text-[11px] transition-all cursor-pointer"
+                          >
+                            Dismiss
+                          </button>
+                          <button
+                            onClick={() => handleDismissInquiry(inq.id, true)}
+                            title="Block this root domain permanently"
+                            className="px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-[11px] transition-all cursor-pointer"
+                          >
+                            Block
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1336,14 +1476,21 @@ export function MessagingApp({
                     </div>
 
                     <div className="flex items-center justify-between mt-1">
-                      <p className="text-[11px] text-[#8696a0] truncate max-w-[180px]">
+                      <p className="text-[11px] text-[#8696a0] truncate max-w-[170px]">
                         {conv.lastMessage?.content || (isPending ? 'Waiting for approval...' : 'Connected')}
                       </p>
-                      {isPending && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
-                          Pending
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {conv.status === 'letterbox' && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-500/15 text-purple-400 border border-purple-500/30 flex items-center gap-0.5">
+                            <Store className="w-2.5 h-2.5" /> Letterbox
+                          </span>
+                        )}
+                        {isPending && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                            Pending
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1379,13 +1526,17 @@ export function MessagingApp({
                 <div className="min-w-0">
                   <h2 className="text-xs sm:text-sm font-semibold text-[#e9edef] flex items-center gap-1.5 truncate">
                     <span className="truncate">{activeConv.otherUser.displayName}</span>
-                    {activeConv.status === 'pending' ? (
+                    {activeConv.status === 'letterbox' ? (
+                      <span className="px-1.5 py-0.5 rounded-full text-[9px] sm:text-[10px] font-bold bg-purple-500/15 text-purple-300 border border-purple-500/30 shrink-0 flex items-center gap-1">
+                        <Store className="w-2.5 h-2.5" /> Letterbox Customer
+                      </span>
+                    ) : activeConv.status === 'pending' ? (
                       <span className="px-1.5 py-0.5 rounded-full text-[9px] sm:text-[10px] font-normal bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0">
                         Pending
                       </span>
                     ) : (
                       <span className="px-1.5 py-0.5 rounded-full text-[9px] sm:text-[10px] font-normal bg-[#00a884]/10 text-[#00a884] border border-[#00a884]/20 shrink-0">
-                        Online
+                        Friend
                       </span>
                     )}
                   </h2>
@@ -1627,6 +1778,19 @@ export function MessagingApp({
             <p className="text-xs text-[#8696a0] leading-relaxed">
               Enter your contact's username and their deployed Cloudflare Workers URL or domain to send an encrypted connection request.
             </p>
+
+            {accountType === 'business' && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-1.5 text-xs text-[#e9edef]">
+                <div className="flex items-center gap-1.5 text-amber-400 font-bold">
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>Business Friend Request Privacy</span>
+                </div>
+                <p className="text-[11px] text-[#8696a0] leading-snug">
+                  Incoming friend requests to your business are locked to <strong>Private (PIN-Only)</strong> to stop automated bots from consuming your free Cloudflare quota.
+                  You can manually add any private friend here, or share your Private PIN: <strong className="text-[#00a884] font-mono tracking-wider">{myFriendPin || 'NP-7429'}</strong> with trusted suppliers.
+                </p>
+              </div>
+            )}
 
             {addFriendError && (
               <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-400 flex items-center gap-2">
@@ -1932,6 +2096,14 @@ export function MessagingApp({
 
       {/* Offline Connectivity Status Pill */}
       <OfflineIndicator />
+
+      {/* Floating Action Toast Notification */}
+      {inquiryActionToast && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#00a884] text-[#111b21] px-4 py-2.5 rounded-xl text-xs font-bold shadow-2xl flex items-center gap-2 z-50 border border-[#00a884]/40 animate-in fade-in slide-in-from-bottom-2">
+          <Check className="w-4 h-4 shrink-0" />
+          <span>{inquiryActionToast}</span>
+        </div>
+      )}
     </div>
   )
 }

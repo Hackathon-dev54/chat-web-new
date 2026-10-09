@@ -13,7 +13,9 @@ export function App() {
 
   const isShopVisitor = !forceLogin && typeof window !== 'undefined' && (
     window.location.pathname.startsWith('/shop') ||
-    new URLSearchParams(window.location.search).has('shop')
+    new URLSearchParams(window.location.search).has('shop') ||
+    window.location.pathname.startsWith('/letterbox') ||
+    new URLSearchParams(window.location.search).has('letterbox')
   )
 
   useEffect(() => {

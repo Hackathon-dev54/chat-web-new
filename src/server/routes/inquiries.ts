@@ -3,7 +3,7 @@ import { ensureD1Database } from '../db'
 import { memoryStore, broadcastAllStreams } from '../store'
 import { extractRootDomain } from '../domain'
 import { sendPushNotification } from '../webpush'
-import type { Bindings, MemInquiry, MemConversation, MemMessage } from '../types'
+import type { Bindings, MemInquiry, MemConversation, MemMessage, MemFriendship } from '../types'
 
 const inquiryRoutes = new Hono<{ Bindings: Bindings }>()
 
@@ -15,7 +15,7 @@ const inquiryRoutes = new Hono<{ Bindings: Bindings }>()
 inquiryRoutes.post('/api/inquiries', async (c) => {
   try {
     const body = await c.req.json()
-    const { shopHandle, senderName, senderHandle, senderOriginUrl, content } = body
+    const { shopHandle, senderName, senderHandle, senderOriginUrl, content, contactPhone, category } = body
 
     const cleanContent = (content || '').trim()
     if (!cleanContent) {
@@ -24,6 +24,14 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
 
     if (cleanContent.length > 500) {
       return c.json({ error: 'Inquiry note cannot exceed 500 characters' }, 400)
+    }
+
+    let formattedContent = cleanContent
+    if (category && category.trim()) {
+      formattedContent = `[${category.trim()}] ${formattedContent}`
+    }
+    if (contactPhone && contactPhone.trim()) {
+      formattedContent = `${formattedContent} • 📞 ${contactPhone.trim()}`
     }
 
     const cleanSenderName = (senderName || 'Nepali Shopper').trim()
@@ -123,7 +131,7 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       sender_name: cleanSenderName,
       sender_root_domain: rootDomain,
       sender_origin_url: origin,
-      content: cleanContent,
+      content: formattedContent,
       status: 'pending',
       created_at: now,
     }
@@ -134,7 +142,7 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       try {
         await db.prepare(
           'INSERT INTO static_inquiries (id, sender_handle, sender_name, sender_root_domain, sender_origin_url, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, "pending", ?)'
-        ).bind(inquiryId, cleanSenderHandle, cleanSenderName, rootDomain, origin, cleanContent, now).run()
+        ).bind(inquiryId, cleanSenderHandle, cleanSenderName, rootDomain, origin, formattedContent, now).run()
       } catch (d1Err: any) {
         console.warn('[D1 Inquiry Insert Warning]', d1Err?.message)
       }
@@ -189,8 +197,108 @@ inquiryRoutes.get('/api/inquiries', async (c) => {
   })
 })
 
-// Shop owner replies / accepts inquiry (Unlocks full 2-way chat)
+// Shop owner replies / accepts inquiry (Unlocks full 2-way chat as Letterbox Customer Chat)
 inquiryRoutes.post('/api/inquiries/reply', async (c) => {
+  try {
+    const { inquiryId, asFriend } = await c.req.json()
+    if (!inquiryId) return c.json({ error: 'Inquiry ID required' }, 400)
+
+    const db = c.env?.DB
+    const now = Date.now()
+
+    let inquiry = memoryStore.inquiries.get(inquiryId)
+    if (!inquiry && db) {
+      try {
+        await ensureD1Database(db)
+        const row: any = await db.prepare('SELECT * FROM static_inquiries WHERE id = ? LIMIT 1').bind(inquiryId).first()
+        if (row) inquiry = row
+      } catch {}
+    }
+
+    if (!inquiry) {
+      return c.json({ error: 'Inquiry note not found' }, 404)
+    }
+
+    // Mark inquiry accepted
+    inquiry.status = 'accepted'
+    const conversationId = 'conv_' + inquiry.sender_handle
+    const messageId = 'msg_' + Math.random().toString(36).slice(2, 9)
+    const convStatus = asFriend ? 'active' : 'letterbox'
+
+    // Create conversation record
+    const convRecord: MemConversation = {
+      id: conversationId,
+      user_a: 'usr_admin',
+      user_b: inquiry.sender_handle,
+      remote_handle: inquiry.sender_handle,
+      remote_instance_url: inquiry.sender_origin_url,
+      last_message_snippet: inquiry.content,
+      last_message_at: now,
+      status: convStatus,
+    }
+    memoryStore.conversations.set(conversationId, convRecord)
+
+    // Store inquiry message as first message
+    const msgRecord: MemMessage = {
+      id: messageId,
+      conversation_id: conversationId,
+      sender_id: inquiry.sender_handle,
+      content: inquiry.content,
+      created_at: now,
+      read_at: now,
+    }
+    memoryStore.messages.push(msgRecord)
+
+    // If asFriend was chosen, also create friendship record
+    let friendshipRecord: MemFriendship | null = null
+    if (asFriend) {
+      const friendshipId = 'fr_priv_' + Math.random().toString(36).slice(2, 9)
+      friendshipRecord = {
+        id: friendshipId,
+        local_user_id: 'usr_admin',
+        remote_handle: inquiry.sender_handle,
+        remote_instance_url: inquiry.sender_origin_url,
+        status: 'active',
+        direction: 'outgoing',
+        created_at: now,
+      }
+      memoryStore.friendships.set(friendshipId, friendshipRecord)
+    }
+
+    if (db) {
+      try {
+        await db.prepare("UPDATE static_inquiries SET status = 'accepted' WHERE id = ?").bind(inquiryId).run()
+        await db.prepare('INSERT OR REPLACE INTO conversations (id, user_a, user_b, remote_handle, remote_instance_url, last_message_snippet, last_message_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(convRecord.id, convRecord.user_a, convRecord.user_b, convRecord.remote_handle, convRecord.remote_instance_url, convRecord.last_message_snippet, now, convStatus).run()
+        await db.prepare('INSERT OR REPLACE INTO messages (id, conversation_id, sender_id, content, created_at, read_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(msgRecord.id, msgRecord.conversation_id, msgRecord.sender_id, msgRecord.content, now, now).run()
+        if (friendshipRecord) {
+          await db.prepare('INSERT OR REPLACE INTO federation_friendships (id, local_user_id, remote_handle, remote_instance_url, status, direction, created_at) VALUES (?, ?, ?, ?, "active", "outgoing", ?)')
+            .bind(friendshipRecord.id, 'usr_admin', inquiry.sender_handle, inquiry.sender_origin_url, now).run()
+        }
+      } catch (d1Err: any) {
+        console.warn('[D1 Reply Convert Warning]', d1Err?.message)
+      }
+    }
+
+    await broadcastAllStreams('conversation_updated', convRecord, c.env)
+    await broadcastAllStreams('inquiry_status_updated', { inquiryId, status: 'accepted' }, c.env)
+
+    return c.json({
+      success: true,
+      conversationId,
+      status: convStatus,
+      message: asFriend
+        ? 'Inquiry accepted and customer added as Private Friend!'
+        : 'Inquiry accepted as Letterbox Customer Chat!',
+    })
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400)
+  }
+})
+
+// Business owner accepts inquiry AND adds the customer as a private trusted friend
+inquiryRoutes.post('/api/inquiries/add-friend', async (c) => {
   try {
     const { inquiryId } = await c.req.json()
     if (!inquiryId) return c.json({ error: 'Inquiry ID required' }, 400)
@@ -211,10 +319,22 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
       return c.json({ error: 'Inquiry note not found' }, 404)
     }
 
-    // Mark inquiry accepted
     if (inquiry) inquiry.status = 'accepted'
     const conversationId = 'conv_' + inquiry.sender_handle
+    const friendshipId = 'fr_priv_' + Math.random().toString(36).slice(2, 9)
     const messageId = 'msg_' + Math.random().toString(36).slice(2, 9)
+
+    // Create mutual active friendship record
+    const friendshipRecord: MemFriendship = {
+      id: friendshipId,
+      local_user_id: 'usr_admin',
+      remote_handle: inquiry.sender_handle,
+      remote_instance_url: inquiry.sender_origin_url,
+      status: 'active',
+      direction: 'outgoing',
+      created_at: now,
+    }
+    memoryStore.friendships.set(friendshipId, friendshipRecord)
 
     // Create active conversation
     const convRecord: MemConversation = {
@@ -223,13 +343,12 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
       user_b: inquiry.sender_handle,
       remote_handle: inquiry.sender_handle,
       remote_instance_url: inquiry.sender_origin_url,
-      last_message_snippet: inquiry.content,
+      last_message_snippet: `Added as private friend: ${inquiry.content}`,
       last_message_at: now,
       status: 'active',
     }
     memoryStore.conversations.set(conversationId, convRecord)
 
-    // Store inquiry message as first message
     const msgRecord: MemMessage = {
       id: messageId,
       conversation_id: conversationId,
@@ -243,12 +362,14 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
     if (db) {
       try {
         await db.prepare("UPDATE static_inquiries SET status = 'accepted' WHERE id = ?").bind(inquiryId).run()
+        await db.prepare('INSERT OR REPLACE INTO federation_friendships (id, local_user_id, remote_handle, remote_instance_url, status, direction, created_at) VALUES (?, ?, ?, ?, "active", "outgoing", ?)')
+          .bind(friendshipId, 'usr_admin', inquiry.sender_handle, inquiry.sender_origin_url, now).run()
         await db.prepare('INSERT OR REPLACE INTO conversations (id, user_a, user_b, remote_handle, remote_instance_url, last_message_snippet, last_message_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, "active")')
           .bind(convRecord.id, convRecord.user_a, convRecord.user_b, convRecord.remote_handle, convRecord.remote_instance_url, convRecord.last_message_snippet, now).run()
         await db.prepare('INSERT OR REPLACE INTO messages (id, conversation_id, sender_id, content, created_at, read_at) VALUES (?, ?, ?, ?, ?, ?)')
           .bind(msgRecord.id, msgRecord.conversation_id, msgRecord.sender_id, msgRecord.content, now, now).run()
       } catch (d1Err: any) {
-        console.warn('[D1 Reply Convert Warning]', d1Err?.message)
+        console.warn('[D1 Add Friend Warning]', d1Err?.message)
       }
     }
 
@@ -258,7 +379,8 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
     return c.json({
       success: true,
       conversationId,
-      message: 'Inquiry accepted! Conversation unlocked.',
+      friendship: friendshipRecord,
+      message: 'Customer added as private friend! Conversation unlocked.',
     })
   } catch (err: any) {
     return c.json({ error: err.message }, 400)

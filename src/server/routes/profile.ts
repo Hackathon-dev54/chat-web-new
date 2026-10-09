@@ -27,8 +27,13 @@ profileRoutes.get('/api/profile', async (c) => {
     handle: adminHandle,
     accountType: (memoryStore.config.get('account_type') as 'personal' | 'business') || 'personal',
     bio: memoryStore.config.get('bio') || '',
-    businessCategory: memoryStore.config.get('business_category') || 'General',
-    privacyMode: (memoryStore.config.get('privacy_mode') as 'open' | 'pin_only' | 'closed') || 'open',
+    businessCategory: memoryStore.config.get('business_category') || 'General & Retail',
+    businessPhone: memoryStore.config.get('business_phone') || '',
+    businessLocation: memoryStore.config.get('business_location') || 'Kathmandu, Nepal',
+    businessHours: memoryStore.config.get('business_hours') || 'Sun - Fri: 10:00 AM - 7:00 PM',
+    deliveryInfo: memoryStore.config.get('delivery_info') || 'All Nepal Courier & Inside Valley Delivery',
+    catalogTags: memoryStore.config.get('catalog_tags') || 'Retail, Wholesale, Custom Orders, Cash on Delivery',
+    privacyMode: (memoryStore.config.get('privacy_mode') as 'open' | 'pin_only' | 'closed') || 'pin_only',
     friendPin: memoryStore.config.get('friend_pin') || '',
     inquiryLetterboxEnabled: memoryStore.config.get('inquiry_letterbox_enabled') !== 'false',
     instanceUrl: c.req.url.replace(/\/api\/.*$/, ''),
@@ -38,7 +43,7 @@ profileRoutes.get('/api/profile', async (c) => {
     try {
       await ensureD1Database(db)
       const { results } = await db.prepare(
-        "SELECT key, value FROM system_config WHERE key IN ('display_name', 'account_type', 'bio', 'business_category', 'privacy_mode', 'friend_pin', 'inquiry_letterbox_enabled')"
+        "SELECT key, value FROM system_config WHERE key IN ('display_name', 'account_type', 'bio', 'business_category', 'business_phone', 'business_location', 'business_hours', 'delivery_info', 'catalog_tags', 'privacy_mode', 'friend_pin', 'inquiry_letterbox_enabled')"
       ).all()
 
       if (Array.isArray(results)) {
@@ -47,6 +52,11 @@ profileRoutes.get('/api/profile', async (c) => {
           if (row.key === 'account_type') profile.accountType = row.value
           if (row.key === 'bio') profile.bio = row.value
           if (row.key === 'business_category') profile.businessCategory = row.value
+          if (row.key === 'business_phone') profile.businessPhone = row.value
+          if (row.key === 'business_location') profile.businessLocation = row.value
+          if (row.key === 'business_hours') profile.businessHours = row.value
+          if (row.key === 'delivery_info') profile.deliveryInfo = row.value
+          if (row.key === 'catalog_tags') profile.catalogTags = row.value
           if (row.key === 'privacy_mode') profile.privacyMode = row.value
           if (row.key === 'friend_pin') profile.friendPin = row.value
           if (row.key === 'inquiry_letterbox_enabled') profile.inquiryLetterboxEnabled = row.value === 'true'
@@ -61,6 +71,11 @@ profileRoutes.get('/api/profile', async (c) => {
     } catch (e: any) {
       console.warn('[D1 Profile Read Warning]', e?.message)
     }
+  }
+
+  // For Business Accounts, friend requests are always private only (pin_only or closed)
+  if (profile.accountType === 'business' && profile.privacyMode === 'open') {
+    profile.privacyMode = 'pin_only'
   }
 
   // Ensure default PIN exists
@@ -86,6 +101,11 @@ profileRoutes.post('/api/profile', async (c) => {
       accountType,
       bio,
       businessCategory,
+      businessPhone,
+      businessLocation,
+      businessHours,
+      deliveryInfo,
+      catalogTags,
       privacyMode,
       friendPin,
       inquiryLetterboxEnabled,
@@ -94,8 +114,19 @@ profileRoutes.post('/api/profile', async (c) => {
     const cleanName = (displayName || '').trim() || 'Chatze User'
     const cleanAccountType = accountType === 'business' ? 'business' : 'personal'
     const cleanBio = (bio || '').trim()
-    const cleanCategory = (businessCategory || 'General').trim()
-    const cleanPrivacy = ['open', 'pin_only', 'closed'].includes(privacyMode) ? privacyMode : 'pin_only'
+    const cleanCategory = (businessCategory || 'General & Retail').trim()
+    const cleanPhone = (businessPhone || '').trim()
+    const cleanLocation = (businessLocation || 'Kathmandu, Nepal').trim()
+    const cleanHours = (businessHours || 'Sun - Fri: 10:00 AM - 7:00 PM').trim()
+    const cleanDelivery = (deliveryInfo || 'All Nepal Courier & Inside Valley Delivery').trim()
+    const cleanCatalog = (catalogTags || 'Retail, Wholesale, Custom Orders, Cash on Delivery').trim()
+    
+    // For business accounts, friend requests are ALWAYS private (pin_only or closed) to prevent spam
+    let cleanPrivacy = ['open', 'pin_only', 'closed'].includes(privacyMode) ? privacyMode : 'pin_only'
+    if (cleanAccountType === 'business' && cleanPrivacy === 'open') {
+      cleanPrivacy = 'pin_only'
+    }
+
     const cleanPin = (friendPin || '').trim() || generatePin()
     const cleanLetterbox = inquiryLetterboxEnabled !== false ? 'true' : 'false'
 
@@ -104,6 +135,11 @@ profileRoutes.post('/api/profile', async (c) => {
     memoryStore.config.set('account_type', cleanAccountType)
     memoryStore.config.set('bio', cleanBio)
     memoryStore.config.set('business_category', cleanCategory)
+    memoryStore.config.set('business_phone', cleanPhone)
+    memoryStore.config.set('business_location', cleanLocation)
+    memoryStore.config.set('business_hours', cleanHours)
+    memoryStore.config.set('delivery_info', cleanDelivery)
+    memoryStore.config.set('catalog_tags', cleanCatalog)
     memoryStore.config.set('privacy_mode', cleanPrivacy)
     memoryStore.config.set('friend_pin', cleanPin)
     memoryStore.config.set('inquiry_letterbox_enabled', cleanLetterbox)
@@ -122,6 +158,11 @@ profileRoutes.post('/api/profile', async (c) => {
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('account_type', ?)").bind(cleanAccountType),
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('bio', ?)").bind(cleanBio),
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('business_category', ?)").bind(cleanCategory),
+          db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('business_phone', ?)").bind(cleanPhone),
+          db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('business_location', ?)").bind(cleanLocation),
+          db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('business_hours', ?)").bind(cleanHours),
+          db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('delivery_info', ?)").bind(cleanDelivery),
+          db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('catalog_tags', ?)").bind(cleanCatalog),
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('privacy_mode', ?)").bind(cleanPrivacy),
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('friend_pin', ?)").bind(cleanPin),
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('inquiry_letterbox_enabled', ?)").bind(cleanLetterbox),
@@ -139,6 +180,11 @@ profileRoutes.post('/api/profile', async (c) => {
         accountType: cleanAccountType,
         bio: cleanBio,
         businessCategory: cleanCategory,
+        businessPhone: cleanPhone,
+        businessLocation: cleanLocation,
+        businessHours: cleanHours,
+        deliveryInfo: cleanDelivery,
+        catalogTags: cleanCatalog,
         privacyMode: cleanPrivacy,
         friendPin: cleanPin,
         inquiryLetterboxEnabled: cleanLetterbox === 'true',

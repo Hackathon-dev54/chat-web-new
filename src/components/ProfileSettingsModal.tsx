@@ -68,6 +68,11 @@ export function ProfileSettingsModal({
   const [accountType, setAccountType] = useState<'personal' | 'business'>('personal')
   const [bio, setBio] = useState('')
   const [businessCategory, setBusinessCategory] = useState('General & Personal Shop')
+  const [businessPhone, setBusinessPhone] = useState('')
+  const [businessLocation, setBusinessLocation] = useState('Kathmandu, Nepal')
+  const [businessHours, setBusinessHours] = useState('Sun - Fri: 10:00 AM - 7:00 PM')
+  const [deliveryInfo, setDeliveryInfo] = useState('All Nepal Courier & Inside Valley Delivery')
+  const [catalogTags, setCatalogTags] = useState('Retail, Wholesale, Custom Orders, Cash on Delivery')
   const [privacyMode, setPrivacyMode] = useState<'open' | 'pin_only' | 'closed'>('open')
   const [friendPin, setFriendPin] = useState('')
   const [inquiryLetterboxEnabled, setInquiryLetterboxEnabled] = useState(true)
@@ -94,6 +99,11 @@ export function ProfileSettingsModal({
             setAccountType(data.profile.accountType || 'personal')
             setBio(data.profile.bio || '')
             setBusinessCategory(data.profile.businessCategory || 'General & Personal Shop')
+            setBusinessPhone(data.profile.businessPhone || '')
+            setBusinessLocation(data.profile.businessLocation || 'Kathmandu, Nepal')
+            setBusinessHours(data.profile.businessHours || 'Sun - Fri: 10:00 AM - 7:00 PM')
+            setDeliveryInfo(data.profile.deliveryInfo || 'All Nepal Courier & Inside Valley Delivery')
+            setCatalogTags(data.profile.catalogTags || 'Retail, Wholesale, Custom Orders, Cash on Delivery')
             setPrivacyMode(data.profile.privacyMode || 'pin_only')
             setFriendPin(data.profile.friendPin || '')
             setInquiryLetterboxEnabled(data.profile.inquiryLetterboxEnabled !== false)
@@ -125,7 +135,12 @@ export function ProfileSettingsModal({
           accountType,
           bio: bio.trim(),
           businessCategory,
-          privacyMode,
+          businessPhone: businessPhone.trim(),
+          businessLocation: businessLocation.trim(),
+          businessHours: businessHours.trim(),
+          deliveryInfo: deliveryInfo.trim(),
+          catalogTags: catalogTags.trim(),
+          privacyMode: accountType === 'business' ? 'pin_only' : privacyMode,
           friendPin,
           inquiryLetterboxEnabled,
         }),
@@ -323,28 +338,89 @@ export function ProfileSettingsModal({
                     </div>
                   </div>
 
-                  {/* Business Category (Only when business) */}
+                  {/* Business Details (Only when business) */}
                   {accountType === 'business' && (
-                    <div className="space-y-1.5">
-                      <label className="font-semibold text-amber-400">Business Category</label>
-                      <select
-                        value={businessCategory}
-                        onChange={(e) => setBusinessCategory(e.target.value)}
-                        className="w-full px-3 py-2 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] focus:outline-none focus:border-amber-400"
-                      >
-                        {BUSINESS_CATEGORIES.map((cat) => (
-                          <option key={cat} value={cat} className="bg-[#111b21] text-[#e9edef]">
-                            {cat}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    <>
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-amber-400">Business Category</label>
+                        <select
+                          value={businessCategory}
+                          onChange={(e) => setBusinessCategory(e.target.value)}
+                          className="w-full px-3 py-2 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] focus:outline-none focus:border-amber-400"
+                        >
+                          {BUSINESS_CATEGORIES.map((cat) => (
+                            <option key={cat} value={cat} className="bg-[#111b21] text-[#e9edef]">
+                              {cat}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="space-y-1.5">
+                          <label className="font-semibold text-[#8696a0]">City / Location</label>
+                          <input
+                            type="text"
+                            value={businessLocation}
+                            onChange={(e) => setBusinessLocation(e.target.value)}
+                            placeholder="e.g. Thamel, Kathmandu"
+                            className="w-full px-3 py-2 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/60 focus:outline-none focus:border-[#00a884]"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="font-semibold text-[#8696a0]">Contact Phone / WhatsApp</label>
+                          <input
+                            type="text"
+                            value={businessPhone}
+                            onChange={(e) => setBusinessPhone(e.target.value)}
+                            placeholder="e.g. 9841XXXXXX"
+                            className="w-full px-3 py-2 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/60 focus:outline-none focus:border-[#00a884]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="space-y-1.5">
+                          <label className="font-semibold text-[#8696a0]">Working Hours</label>
+                          <input
+                            type="text"
+                            value={businessHours}
+                            onChange={(e) => setBusinessHours(e.target.value)}
+                            placeholder="e.g. Sun - Fri: 10 AM - 7 PM"
+                            className="w-full px-3 py-2 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/60 focus:outline-none focus:border-[#00a884]"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="font-semibold text-[#8696a0]">Delivery Coverage</label>
+                          <input
+                            type="text"
+                            value={deliveryInfo}
+                            onChange={(e) => setDeliveryInfo(e.target.value)}
+                            placeholder="e.g. All Nepal Courier & Valley"
+                            className="w-full px-3 py-2 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/60 focus:outline-none focus:border-[#00a884]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-[#8696a0]">Specialties & Tags (Comma Separated)</label>
+                        <input
+                          type="text"
+                          value={catalogTags}
+                          onChange={(e) => setCatalogTags(e.target.value)}
+                          placeholder="e.g. Jackets, Hoodies, Wholesale, Cash on Delivery"
+                          className="w-full px-3 py-2 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/60 focus:outline-none focus:border-[#00a884]"
+                        />
+                      </div>
+                    </>
                   )}
 
                   {/* Bio / Tagline */}
                   <div className="space-y-1.5">
                     <label className="font-semibold text-[#8696a0]">
-                      {accountType === 'business' ? 'Shop Description / Delivery Notice' : 'Bio / Status'}
+                      {accountType === 'business' ? 'Shop Description / Customer Note' : 'Bio / Status'}
                     </label>
                     <textarea
                       rows={2}
@@ -352,7 +428,7 @@ export function ProfileSettingsModal({
                       onChange={(e) => setBio(e.target.value)}
                       placeholder={
                         accountType === 'business'
-                          ? 'e.g. Premium winter streetwear. Delivery all across Nepal (eSewa / COD).'
+                          ? 'e.g. Premium streetwear and handicrafts. Delivery all across Nepal (eSewa / COD).'
                           : 'e.g. Available for coffee in Thamel. Ping me anytime.'
                       }
                       className="w-full px-3 py-2 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/60 focus:outline-none focus:border-[#00a884] resize-none"
@@ -364,12 +440,33 @@ export function ProfileSettingsModal({
               {/* TAB 2: PRIVACY & ANTI-SPAM */}
               {activeTab === 'privacy' && (
                 <div className="space-y-4 text-xs">
+                  {/* Business Notice if in Business mode */}
+                  {accountType === 'business' ? (
+                    <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2">
+                      <div className="flex items-center gap-2 text-amber-400 font-bold">
+                        <Shield className="w-4 h-4" />
+                        <span>Business Privacy Protection Active</span>
+                      </div>
+                      <p className="text-[11px] text-[#e9edef]/90 leading-relaxed">
+                        To protect your Cloudflare Worker quota from bot attacks and unwanted spam,
+                        incoming stranger friend requests are <strong>Private Only (PIN-Protected)</strong>.
+                      </p>
+                      <ul className="text-[11px] text-[#8696a0] list-disc list-inside space-y-0.5">
+                        <li>Customers connect with you via your public <strong>Letterbox Portfolio</strong> without friend requests.</li>
+                        <li>You can still manually add any friend as private directly from your dashboard.</li>
+                        <li>Trusted business partners can connect if you give them your Private Friend PIN.</li>
+                      </ul>
+                    </div>
+                  ) : null}
+
                   {/* Personal Friend PIN Card */}
                   <div className="p-4 bg-[#0b141a] border border-[#202c33] rounded-xl space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <KeyRound className="w-4 h-4 text-[#00a884]" />
-                        <span className="font-bold text-[#e9edef]">Personal Friend PIN</span>
+                        <span className="font-bold text-[#e9edef]">
+                          {accountType === 'business' ? 'Private Business Friend PIN' : 'Personal Friend PIN'}
+                        </span>
                       </div>
                       <button
                         type="button"
@@ -383,8 +480,9 @@ export function ProfileSettingsModal({
                     </div>
 
                     <p className="text-[11px] text-[#8696a0]">
-                      Give this PIN to friends you trust. When Privacy Mode is set to <strong>PIN Only</strong>,
-                      strangers and bots cannot send you friend requests without it.
+                      {accountType === 'business'
+                        ? 'Share this PIN only with trusted close partners or suppliers who need a direct 1-on-1 friend channel.'
+                        : 'Give this PIN to friends you trust. When Privacy Mode is set to PIN Only, strangers and bots cannot add you without it.'}
                     </p>
 
                     <div className="flex items-center gap-2 p-2.5 bg-[#111b21] border border-[#202c33] rounded-xl">
@@ -402,88 +500,90 @@ export function ProfileSettingsModal({
                     </div>
                   </div>
 
-                  {/* Privacy Mode Selector */}
-                  <div className="space-y-2">
-                    <label className="font-bold text-[#8696a0] block text-[11px] uppercase tracking-wider">
-                      Who Can Send You Friend Requests?
-                    </label>
+                  {/* Privacy Mode Selector (Only configurable if personal) */}
+                  {accountType === 'personal' && (
                     <div className="space-y-2">
-                      <label
-                        className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
-                          privacyMode === 'pin_only'
-                            ? 'bg-[#00a884]/10 border-[#00a884]'
-                            : 'bg-[#0b141a] border-[#202c33] hover:border-[#8696a0]/40'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="privacyMode"
-                          value="pin_only"
-                          checked={privacyMode === 'pin_only'}
-                          onChange={() => setPrivacyMode('pin_only')}
-                          className="mt-0.5 accent-[#00a884]"
-                        />
-                        <div className="space-y-0.5">
-                          <span className="font-bold text-[#e9edef] block">
-                            🔒 PIN Protected (Recommended for Nepal)
-                          </span>
-                          <span className="text-[11px] text-[#8696a0] block">
-                            Only people who have your 6-digit PIN or scan your QR code can add you. Blocks 100% of blind bots.
-                          </span>
-                        </div>
+                      <label className="font-bold text-[#8696a0] block text-[11px] uppercase tracking-wider">
+                        Who Can Send You Friend Requests?
                       </label>
+                      <div className="space-y-2">
+                        <label
+                          className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                            privacyMode === 'pin_only'
+                              ? 'bg-[#00a884]/10 border-[#00a884]'
+                              : 'bg-[#0b141a] border-[#202c33] hover:border-[#8696a0]/40'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="privacyMode"
+                            value="pin_only"
+                            checked={privacyMode === 'pin_only'}
+                            onChange={() => setPrivacyMode('pin_only')}
+                            className="mt-0.5 accent-[#00a884]"
+                          />
+                          <div className="space-y-0.5">
+                            <span className="font-bold text-[#e9edef] block">
+                              🔒 PIN Protected (Recommended for Nepal)
+                            </span>
+                            <span className="text-[11px] text-[#8696a0] block">
+                              Only people who have your PIN or scan your QR code can add you. Blocks 100% of blind bots.
+                            </span>
+                          </div>
+                        </label>
 
-                      <label
-                        className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
-                          privacyMode === 'open'
-                            ? 'bg-[#00a884]/10 border-[#00a884]'
-                            : 'bg-[#0b141a] border-[#202c33] hover:border-[#8696a0]/40'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="privacyMode"
-                          value="open"
-                          checked={privacyMode === 'open'}
-                          onChange={() => setPrivacyMode('open')}
-                          className="mt-0.5 accent-[#00a884]"
-                        />
-                        <div className="space-y-0.5">
-                          <span className="font-bold text-[#e9edef] block">
-                            🌐 Open Federation (Public Search)
-                          </span>
-                          <span className="text-[11px] text-[#8696a0] block">
-                            Anyone who knows your @handle can send a friend request. (Subject to max 5 pending queue cap).
-                          </span>
-                        </div>
-                      </label>
+                        <label
+                          className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                            privacyMode === 'open'
+                              ? 'bg-[#00a884]/10 border-[#00a884]'
+                              : 'bg-[#0b141a] border-[#202c33] hover:border-[#8696a0]/40'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="privacyMode"
+                            value="open"
+                            checked={privacyMode === 'open'}
+                            onChange={() => setPrivacyMode('open')}
+                            className="mt-0.5 accent-[#00a884]"
+                          />
+                          <div className="space-y-0.5">
+                            <span className="font-bold text-[#e9edef] block">
+                              🌐 Open Federation (Public Search)
+                            </span>
+                            <span className="text-[11px] text-[#8696a0] block">
+                              Anyone who knows your @handle can send a friend request. (Subject to max 5 pending queue cap).
+                            </span>
+                          </div>
+                        </label>
 
-                      <label
-                        className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
-                          privacyMode === 'closed'
-                            ? 'bg-[#00a884]/10 border-[#00a884]'
-                            : 'bg-[#0b141a] border-[#202c33] hover:border-[#8696a0]/40'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="privacyMode"
-                          value="closed"
-                          checked={privacyMode === 'closed'}
-                          onChange={() => setPrivacyMode('closed')}
-                          className="mt-0.5 accent-[#00a884]"
-                        />
-                        <div className="space-y-0.5">
-                          <span className="font-bold text-[#e9edef] block">
-                            🚫 Closed / Incognito
-                          </span>
-                          <span className="text-[11px] text-[#8696a0] block">
-                            Reject all incoming friend requests automatically. You can still send outbound requests.
-                          </span>
-                        </div>
-                      </label>
+                        <label
+                          className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                            privacyMode === 'closed'
+                              ? 'bg-[#00a884]/10 border-[#00a884]'
+                              : 'bg-[#0b141a] border-[#202c33] hover:border-[#8696a0]/40'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="privacyMode"
+                            value="closed"
+                            checked={privacyMode === 'closed'}
+                            onChange={() => setPrivacyMode('closed')}
+                            className="mt-0.5 accent-[#00a884]"
+                          />
+                          <div className="space-y-0.5">
+                            <span className="font-bold text-[#e9edef] block">
+                              🚫 Closed / Incognito
+                            </span>
+                            <span className="text-[11px] text-[#8696a0] block">
+                              Reject all incoming friend requests automatically. You can still send outbound requests.
+                            </span>
+                          </div>
+                        </label>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Business Letterbox Toggle (For business accounts) */}
                   {accountType === 'business' && (
@@ -504,21 +604,34 @@ export function ProfileSettingsModal({
                     </div>
                   )}
 
-                  {/* Copy Invite Link */}
+                  {/* Copy Invite / Shop Portfolio Link */}
                   <div className="p-3 bg-[#0b141a] border border-[#202c33] rounded-xl space-y-2">
-                    <span className="font-bold text-[#e9edef] block">
-                      {accountType === 'business' ? 'Your Public Shop Link' : 'Your Personal Add-Me Link'}
-                    </span>
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-[#e9edef] block">
+                        {accountType === 'business' ? 'Public Business Portfolio & Letterbox Link' : 'Your Personal Add-Me Link'}
+                      </span>
+                      {accountType === 'business' && (
+                        <a
+                          href="/shop"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] text-[#00a884] hover:underline flex items-center gap-1 font-semibold"
+                        >
+                          <span>Preview Landing Page</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+                    </div>
                     <div className="flex items-center gap-2">
                       <input
                         type="text"
                         readOnly
-                        value={accountType === 'business' ? shopInquiryLink : inviteLink}
+                        value={accountType === 'business' ? `${instanceUrl || window.location.origin}/shop` : inviteLink}
                         className="flex-1 px-2.5 py-1.5 bg-[#111b21] border border-[#202c33] rounded-lg text-[11px] text-[#8696a0] font-mono select-all"
                       />
                       <button
                         type="button"
-                        onClick={() => copyToClipboard(accountType === 'business' ? shopInquiryLink : inviteLink, 'link')}
+                        onClick={() => copyToClipboard(accountType === 'business' ? `${instanceUrl || window.location.origin}/shop` : inviteLink, 'link')}
                         className="px-3 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs flex items-center gap-1 shrink-0"
                       >
                         {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}

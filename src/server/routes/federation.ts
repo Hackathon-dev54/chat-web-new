@@ -190,25 +190,35 @@ federationRoutes.post('/api/federation/v1/requests', async (c) => {
       } catch {}
     }
 
-    // Business accounts are open by default to easily connect with customers!
+    // Business accounts: Incoming friend requests are PRIVATE ONLY (PIN-only)
+    // to protect Edge resources and prevent spam. Customers connect via the public Letterbox portfolio!
     if (accountType === 'business') {
-      privacyMode = 'open'
-    }
-
-    if (privacyMode === 'closed') {
-      return c.json({ error: 'This user has closed incoming friend requests (Incognito Mode).' }, 403)
-    }
-
-    if (privacyMode === 'pin_only') {
       const providedPin = (pin || '').trim()
-      if (!configuredPin) {
-        configuredPin = 'NP-7429'
-      }
+      if (!configuredPin) configuredPin = 'NP-7429'
       if (!providedPin || providedPin.toUpperCase() !== configuredPin.toUpperCase()) {
+        const originUrl = c.req.url.replace(/\/api\/.*$/, '')
         return c.json({
-          error: 'Invalid or missing Friend PIN. This personal account requires a valid PIN or QR code handshake.',
-          code: 'PIN_REQUIRED',
+          error: 'This business account is set to Private for Friend Requests. Customers can send an inquiry note via the public Letterbox portfolio, or provide a private invite PIN.',
+          code: 'BUSINESS_PRIVATE_FRIEND_ONLY',
+          letterboxUrl: `${originUrl}/shop`,
         }, 403)
+      }
+    } else {
+      if (privacyMode === 'closed') {
+        return c.json({ error: 'This user has closed incoming friend requests (Incognito Mode).' }, 403)
+      }
+
+      if (privacyMode === 'pin_only') {
+        const providedPin = (pin || '').trim()
+        if (!configuredPin) {
+          configuredPin = 'NP-7429'
+        }
+        if (!providedPin || providedPin.toUpperCase() !== configuredPin.toUpperCase()) {
+          return c.json({
+            error: 'Invalid or missing Friend PIN. This personal account requires a valid PIN or QR code handshake.',
+            code: 'PIN_REQUIRED',
+          }, 403)
+        }
       }
     }
 
