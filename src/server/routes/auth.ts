@@ -139,6 +139,75 @@ authRoutes.post('/api/auth/sign-in', async (c) => {
   }
 })
 
+authRoutes.post('/api/auth/register', async (c) => {
+  try {
+    const { username, displayName, password } = await c.req.json()
+    const cleanHandle = (username || '').replace(/^@/, '').trim().toLowerCase()
+    const cleanDisplayName = (displayName || username || 'Chatze User').trim()
+    const cleanPassword = (password || '').trim()
+
+    if (!cleanHandle || cleanHandle.length < 3) {
+      return c.json({ error: 'Username must be at least 3 characters long' }, 400)
+    }
+
+    if (!/^[a-z0-9_]+$/.test(cleanHandle)) {
+      return c.json({ error: 'Username can only contain letters, numbers, and underscores' }, 400)
+    }
+
+    if (!cleanPassword || cleanPassword.length < 4) {
+      return c.json({ error: 'Password must be at least 4 characters long' }, 400)
+    }
+
+    const db = c.env?.DB
+
+    if (db) {
+      try {
+        await ensureD1Database(db)
+        const existing: any = await db.prepare("SELECT id FROM users WHERE handle = ? LIMIT 1").bind(cleanHandle).first()
+        if (existing) {
+          return c.json({ error: `@${cleanHandle} is already registered. Please choose another username or sign in.` }, 409)
+        }
+      } catch (e: any) {
+        console.warn('[D1 Register Check Warning]', e?.message)
+      }
+    }
+
+    const memoryExisting = Array.from(memoryStore.users.values()).find((u) => u.handle.toLowerCase() === cleanHandle)
+    if (memoryExisting) {
+      return c.json({ error: `@${cleanHandle} is already registered. Please choose another username or sign in.` }, 409)
+    }
+
+    const userId = 'usr_' + Math.random().toString(36).slice(2, 10)
+    const now = Date.now()
+    const newUser: MemUser = {
+      id: userId,
+      handle: cleanHandle,
+      display_name: cleanDisplayName,
+      password_hash: cleanPassword,
+      role: 'user',
+      created_at: now,
+    }
+
+    memoryStore.users.set(userId, newUser)
+
+    if (db) {
+      try {
+        await db.prepare("INSERT INTO users (id, handle, display_name, password_hash, role, created_at) VALUES (?, ?, ?, ?, 'user', ?)")
+          .bind(userId, cleanHandle, cleanDisplayName, cleanPassword, now).run()
+      } catch (e: any) {
+        console.warn('[D1 Register Insert Warning]', e?.message)
+      }
+    }
+
+    const sessionToken = await createSession(userId, db)
+    const { password_hash, ...safe } = newUser
+
+    return c.json({ success: true, token: sessionToken, user: safe }, 201)
+  } catch (err: any) {
+    return c.json({ error: err.message || 'Registration failed' }, 500)
+  }
+})
+
 authRoutes.post('/api/auth/sign-out', async (c) => {
   const authHeader = c.req.header('Authorization') || ''
   const token = authHeader.replace(/^Bearer\s+/i, '').trim()

@@ -135,6 +135,7 @@ export function App() {
         onLoginSuccess={(user, token) => {
           if (token) localStorage.setItem('chatze_auth_token', token)
           setCurrentUser(user)
+          setForceLogin(false)
         }}
       />
     )

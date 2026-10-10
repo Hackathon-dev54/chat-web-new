@@ -20,6 +20,9 @@ import {
   BadgeCheck,
   User,
   ExternalLink,
+  LogIn,
+  UserPlus,
+  X,
 } from 'lucide-react'
 
 interface ShopProfile {
@@ -68,6 +71,15 @@ export function CustomerInquiryPage({
   const [existingInquiry, setExistingInquiry] = useState<any>(null)
   const [errorMessage, setErrorMessage] = useState('')
   const [copiedShare, setCopiedShare] = useState(false)
+
+  // In-page quick authentication modal state
+  const [showAuthModal, setShowAuthModal] = useState(false)
+  const [authMode, setAuthMode] = useState<'signin' | 'register'>('signin')
+  const [authUsername, setAuthUsername] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authDisplayName, setAuthDisplayName] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
+  const [authError, setAuthError] = useState('')
 
   // 1. Load shop profile & detect existing auth session
   useEffect(() => {
@@ -138,13 +150,78 @@ export function CustomerInquiryPage({
     }
   }
 
+  const handleQuickAuth = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setAuthLoading(true)
+    setAuthError('')
+
+    const cleanHandle = authUsername.replace(/^@/, '').trim().toLowerCase()
+    if (!cleanHandle) {
+      setAuthError('Please enter a username')
+      setAuthLoading(false)
+      return
+    }
+
+    try {
+      const endpoint = authMode === 'signin' ? '/api/auth/sign-in' : '/api/auth/register'
+      const payload = authMode === 'signin'
+        ? { username: cleanHandle, password: authPassword }
+        : { username: cleanHandle, displayName: authDisplayName.trim() || cleanHandle, password: authPassword }
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      const data = await res.json()
+      if (res.ok && data.user) {
+        if (data.token) {
+          localStorage.setItem('chatze_auth_token', data.token)
+        }
+        setAuthedUser(data.user)
+        setSenderName(data.user.display_name)
+        setSenderContact(`@${data.user.handle}`)
+        setShowAuthModal(false)
+
+        // Check if this newly signed in user has an existing inquiry
+        try {
+          const inqRes = await fetch('/api/inquiries', {
+            headers: data.token ? { Authorization: `Bearer ${data.token}` } : {},
+          })
+          if (inqRes.ok) {
+            const inqData = await inqRes.json()
+            if (inqData.inquiries && inqData.inquiries.length > 0) {
+              const myNote = inqData.inquiries.find(
+                (i: any) =>
+                  i.status === 'pending' ||
+                  i.sender_handle === data.user.handle ||
+                  i.sender_user_id === data.user.id
+              )
+              if (myNote) {
+                setExistingInquiry(myNote)
+                setSubmitted(true)
+              }
+            }
+          }
+        } catch {}
+      } else {
+        setAuthError(data.error || 'Authentication failed')
+      }
+    } catch (err: any) {
+      setAuthError(err?.message || 'Network error')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!noteContent.trim()) return
 
-    const effectiveName = (senderName.trim() || authedUser?.display_name || '').trim()
-    if (!effectiveName) {
-      setErrorMessage('Please provide your name or sign in to your Chatze account.')
+    if (!authedUser) {
+      setAuthMode('signin')
+      setShowAuthModal(true)
       return
     }
 
@@ -156,18 +233,15 @@ export function CustomerInquiryPage({
     if (token) headers['Authorization'] = `Bearer ${token}`
 
     try {
-      const cleanContact = senderContact.trim()
-      const effectiveHandle = authedUser?.handle || cleanContact.replace(/^@/, '') || effectiveName.toLowerCase().replace(/\s+/g, '_')
-
       const res = await fetch('/api/inquiries', {
         method: 'POST',
         headers,
         body: JSON.stringify({
           shopHandle,
-          senderName: effectiveName,
-          senderHandle: effectiveHandle,
-          senderUserId: authedUser?.id || null,
-          contactPhone: cleanContact.startsWith('@') ? '' : cleanContact,
+          senderName: authedUser.display_name,
+          senderHandle: authedUser.handle,
+          senderUserId: authedUser.id,
+          contactPhone: senderContact.startsWith('@') ? '' : senderContact,
           category: selectedCategory,
           content: noteContent.trim(),
           senderOriginUrl: window.location.origin,
@@ -186,6 +260,9 @@ export function CustomerInquiryPage({
         })
         localStorage.setItem(`chatze_inq_${shopHandle}`, 'true')
       } else {
+        if (data.code === 'AUTH_REQUIRED') {
+          setShowAuthModal(true)
+        }
         setErrorMessage(data.error || 'Failed to submit inquiry')
       }
     } catch (err: any) {
@@ -241,8 +318,8 @@ export function CustomerInquiryPage({
                 </>
               ) : (
                 <>
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Share</span>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Share Shop</span>
                 </>
               )}
             </button>
@@ -250,101 +327,99 @@ export function CustomerInquiryPage({
             {authedUser ? (
               <button
                 onClick={handleNavigateToLetterbox}
-                className="text-xs font-semibold text-[#00a884] hover:bg-[#00a884]/10 transition-colors flex items-center gap-1.5 py-1.5 px-3 rounded-lg border border-[#00a884]/30 cursor-pointer"
+                className="px-3 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
               >
-                <span>My Letterbox</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>My Messages</span>
               </button>
             ) : (
               <button
-                onClick={onSwitchToOwnerLogin}
-                className="text-xs font-semibold text-[#8696a0] hover:text-[#00a884] transition-colors flex items-center gap-1 py-1.5 px-2.5 rounded-lg hover:bg-[#202c33]/50 cursor-pointer"
+                onClick={() => {
+                  setAuthMode('signin')
+                  setShowAuthModal(true)
+                }}
+                className="px-3 py-1.5 bg-[#202c33] hover:bg-[#2a3942] text-[#00a884] border border-[#00a884]/40 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
               >
-                <span>Account Login</span>
-                <ArrowRight className="w-3.5 h-3.5" />
+                <LogIn className="w-3.5 h-3.5" />
+                <span>Sign In</span>
               </button>
             )}
           </div>
         </div>
       </header>
 
-      {/* Main Body: Portfolio Showcase & Letterbox */}
-      <main className="flex-1 max-w-4xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+      {/* Main Content Container */}
+      <main className="max-w-4xl w-full mx-auto p-4 sm:p-6 flex-1 flex flex-col justify-center">
         {loading ? (
-          <div className="py-24 text-center text-xs text-[#8696a0] space-y-3">
+          <div className="p-12 text-center space-y-3">
             <div className="w-8 h-8 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <p className="font-medium tracking-wide">Connecting to Edge Cloud...</p>
+            <p className="text-xs text-[#8696a0]">Loading Shop Profile & Letterbox...</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left Column: Business Portfolio Card */}
+            {/* Left Column: Merchant Profile & Catalog Card */}
             <div className="lg:col-span-5 space-y-4">
               <div className="bg-[#111b21] border border-[#202c33] rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
-                {/* Avatar & Title */}
-                <div className="flex items-start gap-4">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#00a884]/30 via-purple-500/20 to-[#00a884]/10 border-2 border-[#00a884]/40 flex items-center justify-center font-black text-xl text-[#00a884] shadow-lg shrink-0">
-                    {(profile?.displayName || 'Chatze Shop').slice(0, 2).toUpperCase()}
+                <div className="flex items-start gap-3.5">
+                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#00a884] to-[#00725a] flex items-center justify-center font-extrabold text-xl text-[#111b21] shadow-lg shrink-0">
+                    {(profile?.displayName || 'Chatze').slice(0, 2).toUpperCase()}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <h1 className="text-lg font-extrabold text-[#e9edef] leading-tight">
-                        {profile?.displayName || 'Chatze Business'}
-                      </h1>
-                      <ShieldCheck className="w-4 h-4 text-[#00a884] shrink-0" />
+                  <div className="min-w-0">
+                    <h1 className="text-lg font-bold text-[#e9edef] truncate leading-tight">
+                      {profile?.displayName || 'Chatze Verified Shop'}
+                    </h1>
+                    <div className="flex items-center gap-1.5 text-xs text-[#8696a0] mt-0.5">
+                      <span className="w-2 h-2 rounded-full bg-[#00a884]"></span>
+                      <span className="font-mono">@{profile?.handle || shopHandle}</span>
                     </div>
-                    <div className="text-xs text-[#00a884] font-medium mt-0.5">
-                      @{profile?.handle || shopHandle}
-                    </div>
-                    <div className="inline-block mt-2 px-2.5 py-0.5 bg-[#202c33] rounded-full text-[11px] text-[#8696a0] font-medium border border-[#2a3942]">
-                      {profile?.businessCategory || 'Store & Services'}
-                    </div>
+                    <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-[#00a884]/15 text-[#00a884] border border-[#00a884]/30">
+                      {profile?.businessCategory || 'Nepal Merchant Hub'}
+                    </span>
                   </div>
                 </div>
 
-                {/* About Bio */}
-                <div className="p-3.5 bg-[#0b141a] rounded-xl border border-[#202c33] text-xs text-[#e9edef]/90 leading-relaxed font-sans">
+                <p className="text-xs text-[#8696a0] leading-relaxed bg-[#0b141a] p-3 rounded-xl border border-[#202c33]/70">
                   {profile?.bio ||
-                    'Welcome to our official Chatze business portfolio! Drop your customer inquiry, size queries, or wholesale requirements in our Letterbox below. We reply swiftly!'}
-                </div>
+                    'Welcome to our official business storefront on Chatze. Use our zero-spam letterbox below to inquire about products, pricing, bulk orders, or valley delivery.'}
+                </p>
 
-                {/* Business Highlights Metadata */}
-                <div className="space-y-2.5 text-xs">
-                  <div className="flex items-center gap-2.5 text-[#8696a0]">
-                    <MapPin className="w-4 h-4 text-[#00a884] shrink-0" />
-                    <span>Location: <strong className="text-[#e9edef]">{profile?.businessLocation || 'Kathmandu, Nepal'}</strong></span>
-                  </div>
-
-                  <div className="flex items-center gap-2.5 text-[#8696a0]">
-                    <Clock className="w-4 h-4 text-purple-400 shrink-0" />
-                    <span>Hours: <strong className="text-[#e9edef]">{profile?.businessHours || 'Sun - Fri: 10:00 AM - 7:00 PM'}</strong></span>
-                  </div>
-
-                  <div className="flex items-center gap-2.5 text-[#8696a0]">
-                    <Truck className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Delivery: <strong className="text-[#e9edef]">{profile?.deliveryInfo || 'All Nepal Courier & Inside Valley'}</strong></span>
-                  </div>
-
+                {/* Shop Highlights */}
+                <div className="space-y-2.5 text-xs text-[#8696a0]">
+                  {profile?.businessLocation && (
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-[#00a884] shrink-0" />
+                      <span className="text-[#e9edef]">{profile.businessLocation}</span>
+                    </div>
+                  )}
                   {profile?.businessPhone && (
-                    <div className="flex items-center gap-2.5 text-[#8696a0] pt-1">
+                    <div className="flex items-center gap-2">
                       <Phone className="w-4 h-4 text-[#00a884] shrink-0" />
-                      <span>Direct Contact: <a href={`tel:${profile.businessPhone}`} className="text-[#00a884] font-bold hover:underline">{profile.businessPhone}</a></span>
+                      <a href={`tel:${profile.businessPhone}`} className="text-[#00a884] hover:underline font-semibold">
+                        {profile.businessPhone}
+                      </a>
+                    </div>
+                  )}
+                  {profile?.deliveryInfo && (
+                    <div className="flex items-center gap-2">
+                      <Truck className="w-4 h-4 text-[#00a884] shrink-0" />
+                      <span className="text-[#e9edef]">{profile.deliveryInfo}</span>
                     </div>
                   )}
                 </div>
 
-                {/* Specialties & Tags */}
-                <div className="space-y-2 pt-2 border-t border-[#202c33]/70">
-                  <span className="text-[11px] font-bold text-[#8696a0] uppercase tracking-wider block">
-                    Specialties & Services
+                {/* Catalog & Tags Badges */}
+                <div className="space-y-2 pt-1 border-t border-[#202c33]">
+                  <span className="text-[10px] font-bold text-[#8696a0] uppercase tracking-wider block">
+                    Product & Service Tags
                   </span>
                   <div className="flex flex-wrap gap-1.5">
                     {tagsList.map((tag, idx) => (
                       <span
                         key={idx}
-                        className="text-[11px] px-2.5 py-1 bg-[#202c33]/80 border border-[#2a3942] rounded-lg text-[#e9edef] flex items-center gap-1 font-medium"
+                        className="px-2.5 py-1 rounded-lg bg-[#202c33] border border-[#222e35] text-[11px] text-[#e9edef] flex items-center gap-1 font-medium"
                       >
                         <Tag className="w-3 h-3 text-[#00a884]" />
-                        {tag}
+                        <span>{tag}</span>
                       </span>
                     ))}
                   </div>
@@ -411,18 +486,43 @@ export function CustomerInquiryPage({
                     </button>
                   </div>
                 ) : (
-                  <div className="p-3 bg-[#0b141a] border border-[#202c33] rounded-xl flex items-center justify-between text-xs text-[#8696a0]">
-                    <div className="flex items-center gap-2">
-                      <User className="w-4 h-4 text-[#8696a0]" />
-                      <span>Submitting as guest visitor</span>
+                  /* Account Required Banner (Guarantees Customer Receives Replies) */
+                  <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2.5">
+                    <div className="flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="text-xs font-bold text-amber-300">
+                          Account Login Required
+                        </p>
+                        <p className="text-[11px] text-[#8696a0] leading-relaxed">
+                          To protect shops from spam and guarantee that you receive the owner’s real-time replies in your Letterbox, you must be logged in to Chatze.
+                        </p>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={onSwitchToOwnerLogin}
-                      className="text-[#00a884] font-semibold hover:underline cursor-pointer"
-                    >
-                      Sign In to Chatze
-                    </button>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthMode('signin')
+                          setShowAuthModal(true)
+                        }}
+                        className="px-3.5 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs transition-all cursor-pointer shadow-sm flex items-center gap-1.5"
+                      >
+                        <LogIn className="w-3.5 h-3.5" />
+                        <span>Sign In</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthMode('register')
+                          setShowAuthModal(true)
+                        }}
+                        className="px-3.5 py-1.5 bg-[#202c33] hover:bg-[#2a3942] text-[#e9edef] font-semibold rounded-lg text-xs transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        <UserPlus className="w-3.5 h-3.5 text-[#00a884]" />
+                        <span>Create Account</span>
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -440,7 +540,7 @@ export function CustomerInquiryPage({
                       <p className="text-xs text-[#8696a0] max-w-md mx-auto leading-relaxed">
                         {existingInquiry?.status === 'accepted'
                           ? `The shop owner accepted your note! You can now chat in 2-way real-time without losing messages.`
-                          : `Your note has been securely delivered to ${profile?.displayName || 'the shop owner'}. Verified identity: @${authedUser?.handle || senderContact || 'customer'}.`}
+                          : `Your note has been securely delivered to ${profile?.displayName || 'the shop owner'}. Verified identity: @${authedUser?.handle || 'customer'}.`}
                       </p>
                     </div>
 
@@ -518,35 +618,18 @@ export function CustomerInquiryPage({
                       </div>
                     </div>
 
-                    {/* Sender Inputs */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="font-semibold text-xs text-[#8696a0] block mb-1">
-                          Your Name <span className="text-rose-400">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={senderName}
-                          onChange={(e) => setSenderName(e.target.value)}
-                          placeholder="e.g. Suraj Singh"
-                          required
-                          className="w-full px-3.5 py-2.5 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/50 focus:outline-none focus:border-[#00a884] transition-all"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="font-semibold text-xs text-[#8696a0] block mb-1">
-                          Handle / Phone / Email <span className="text-rose-400">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={senderContact}
-                          onChange={(e) => setSenderContact(e.target.value)}
-                          placeholder="e.g. @suraj_singh or 9841XXXXXX"
-                          required
-                          className="w-full px-3.5 py-2.5 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/50 focus:outline-none focus:border-[#00a884] transition-all"
-                        />
-                      </div>
+                    {/* Sender Contact Optional Phone */}
+                    <div>
+                      <label className="font-semibold text-xs text-[#8696a0] block mb-1">
+                        Optional Contact Phone (For direct callback)
+                      </label>
+                      <input
+                        type="text"
+                        value={senderContact.startsWith('@') ? '' : senderContact}
+                        onChange={(e) => setSenderContact(e.target.value)}
+                        placeholder="e.g. 98XXXXXXXX"
+                        className="w-full px-3.5 py-2.5 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/50 focus:outline-none focus:border-[#00a884] transition-all"
+                      />
                     </div>
 
                     {/* Message Details */}
@@ -578,23 +661,37 @@ export function CustomerInquiryPage({
                     )}
 
                     {/* Submit Button */}
-                    <button
-                      type="submit"
-                      disabled={submitting || !noteContent.trim()}
-                      className="w-full py-3 px-4 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#00a884]/20 cursor-pointer disabled:opacity-50"
-                    >
-                      {submitting ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-[#111b21] border-t-transparent rounded-full animate-spin"></div>
-                          <span>Dropping Note in Letterbox...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Send className="w-4 h-4" />
-                          <span>Submit Customer Note (Drop in Box)</span>
-                        </>
-                      )}
-                    </button>
+                    {authedUser ? (
+                      <button
+                        type="submit"
+                        disabled={submitting || !noteContent.trim()}
+                        className="w-full py-3 px-4 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#00a884]/20 cursor-pointer disabled:opacity-50"
+                      >
+                        {submitting ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-[#111b21] border-t-transparent rounded-full animate-spin"></div>
+                            <span>Dropping Note in Letterbox...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-4 h-4" />
+                            <span>Submit Customer Note (Drop in Box)</span>
+                          </>
+                        )}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthMode('signin')
+                          setShowAuthModal(true)
+                        }}
+                        className="w-full py-3 px-4 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all cursor-pointer"
+                      >
+                        <LogIn className="w-4 h-4" />
+                        <span>Sign In / Create Account to Drop Note</span>
+                      </button>
+                    )}
                   </form>
                 )}
 
@@ -613,6 +710,119 @@ export function CustomerInquiryPage({
           </div>
         )}
       </main>
+
+      {/* Quick In-Page Authentication Modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#111b21] border border-[#202c33] rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4 animate-scale-in">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-[#00a884]/20 text-[#00a884]">
+                  <MessageSquare className="w-4 h-4" />
+                </div>
+                <h3 className="font-bold text-sm text-[#e9edef]">
+                  {authMode === 'signin' ? 'Sign In to Chatze' : 'Create Chatze Account'}
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowAuthModal(false)}
+                className="p-1 text-[#8696a0] hover:text-[#e9edef] rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-[11px] text-[#8696a0] leading-relaxed">
+              Your Chatze account links your inquiries so the merchant’s reply safely lands in your Letterbox.
+            </p>
+
+            {/* Mode switch */}
+            <div className="flex bg-[#0b141a] p-1 rounded-xl border border-[#202c33] text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('signin')
+                  setAuthError('')
+                }}
+                className={`flex-1 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                  authMode === 'signin' ? 'bg-[#202c33] text-[#00a884]' : 'text-[#8696a0]'
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('register')
+                  setAuthError('')
+                }}
+                className={`flex-1 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                  authMode === 'register' ? 'bg-[#202c33] text-[#00a884]' : 'text-[#8696a0]'
+                }`}
+              >
+                Create Account
+              </button>
+            </div>
+
+            {authError && (
+              <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs">
+                {authError}
+              </div>
+            )}
+
+            <form onSubmit={handleQuickAuth} className="space-y-3">
+              {authMode === 'register' && (
+                <div className="space-y-1">
+                  <label className="text-[11px] font-medium text-[#8696a0]">Your Full Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={authDisplayName}
+                    onChange={(e) => setAuthDisplayName(e.target.value)}
+                    placeholder="e.g. Suraj Singh"
+                    className="w-full px-3 py-2 bg-[#202c33] border border-[#222e35] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0] focus:outline-none focus:border-[#00a884]"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-[#8696a0]">Username / Handle</label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2 text-[#8696a0] text-xs font-mono">@</span>
+                  <input
+                    type="text"
+                    required
+                    value={authUsername}
+                    onChange={(e) => setAuthUsername(e.target.value)}
+                    placeholder={authMode === 'register' ? 'suraj_singh' : 'your_handle'}
+                    className="w-full pl-7 pr-3 py-2 bg-[#202c33] border border-[#222e35] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0] focus:outline-none focus:border-[#00a884]"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] font-medium text-[#8696a0]">Password</label>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full px-3 py-2 bg-[#202c33] border border-[#222e35] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0] focus:outline-none focus:border-[#00a884]"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading || !authUsername.trim() || !authPassword}
+                className="w-full py-2.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-xl text-xs transition-all shadow-md cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {authLoading ? 'Verifying...' : authMode === 'signin' ? 'Sign In' : 'Create Account & Continue'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <footer className="p-4 border-t border-[#202c33] bg-[#111b21]/40 text-center text-xs text-[#8696a0]">

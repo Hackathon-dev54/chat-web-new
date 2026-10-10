@@ -13,13 +13,13 @@ messagingRoutes.get('/api/messaging', async (c) => {
   if (!conversationId) return c.json({ messages: [] })
   const db = c.env?.DB
 
-  // Bidirectional resolution: if query is conv_alice, also resolve reverse conv_bob if needed
+  // Bidirectional resolution: look up participants from conversation record
   let reverseConvId = conversationId
-  if (conversationId.startsWith('conv_')) {
-    const handlePart = conversationId.replace('conv_', '')
-    const adminUser = memoryStore.users.get('usr_admin')
-    const adminHandle = adminUser?.handle || 'admin'
-    reverseConvId = 'conv_' + adminHandle
+  const existingConv = memoryStore.conversations.get(conversationId)
+  if (existingConv) {
+    if (existingConv.remote_handle) {
+      reverseConvId = 'conv_' + existingConv.remote_handle
+    }
   }
 
   if (db) {

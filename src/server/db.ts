@@ -41,6 +41,9 @@ export async function ensureD1Database(db: any) {
     try {
       await db.prepare('ALTER TABLE static_inquiries ADD COLUMN category TEXT').run()
     } catch {}
+    try {
+      await db.prepare('ALTER TABLE conversations ADD COLUMN status TEXT DEFAULT "active"').run()
+    } catch {}
     d1Initialized = true
   } catch (err: any) {
     console.warn('[D1 Migration Warning]', err?.message)

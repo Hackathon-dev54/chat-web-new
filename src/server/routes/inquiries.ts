@@ -46,13 +46,17 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       formattedContent = `${formattedContent} • 📞 ${contactPhone.trim()}`
     }
 
-    // Authenticated identity binding: If user is logged in, bind verified identity
-    const cleanSenderUserId = authedUser?.id || senderUserId || null
-    const cleanSenderName = (authedUser?.display_name || senderName || 'Customer').trim()
-    const cleanSenderHandle = (authedUser?.handle || senderHandle || (senderUserId ? 'user_' + senderUserId.slice(-5) : 'guest_' + Math.random().toString(36).slice(2, 7)))
-      .replace(/^@/, '')
-      .trim()
-      .toLowerCase()
+    // Authenticated identity binding: Customer must have a Chatze account to drop a note
+    if (!authedUser) {
+      return c.json({
+        error: 'You must be signed in to your Chatze account to drop an inquiry note. This prevents spam and ensures you securely receive replies from the shop owner in your Letterbox.',
+        code: 'AUTH_REQUIRED',
+      }, 401)
+    }
+
+    const cleanSenderUserId = authedUser.id
+    const cleanSenderName = (authedUser.display_name || senderName || 'Customer').trim()
+    const cleanSenderHandle = (authedUser.handle || '').replace(/^@/, '').trim().toLowerCase()
 
     const origin = senderOriginUrl || c.req.header('origin') || c.req.header('referer') || 'direct-client'
     const rootDomain = extractRootDomain(origin)
@@ -281,27 +285,39 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
     const messageId = 'msg_' + Math.random().toString(36).slice(2, 9)
     const convStatus = asFriend ? 'active' : 'letterbox'
 
-    // Admin user details
-    let adminId = 'usr_admin'
-    let adminHandle = 'admin'
-    const adminUser = memoryStore.users.get('usr_admin')
-    if (adminUser) {
-      adminId = adminUser.id
-      adminHandle = adminUser.handle
-    } else if (db) {
+    // Dynamically resolve merchant user details from session or database
+    const authHeader = c.req.header('Authorization') || ''
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim()
+    let merchantUser: any = null
+    if (token) {
+      merchantUser = await validateSession(token, db)
+    }
+
+    let merchantId = merchantUser?.id
+    let merchantHandle = merchantUser?.handle
+    if (!merchantId) {
+      const anyAdmin = Array.from(memoryStore.users.values()).find((u) => u.role === 'admin') || Array.from(memoryStore.users.values())[0]
+      if (anyAdmin) {
+        merchantId = anyAdmin.id
+        merchantHandle = anyAdmin.handle
+      }
+    }
+    if (!merchantId && db) {
       try {
-        const aRow: any = await db.prepare("SELECT id, handle FROM users WHERE role = 'admin' LIMIT 1").first()
+        const aRow: any = await db.prepare("SELECT id, handle FROM users ORDER BY created_at ASC LIMIT 1").first()
         if (aRow) {
-          adminId = aRow.id
-          adminHandle = aRow.handle
+          merchantId = aRow.id
+          merchantHandle = aRow.handle
         }
       } catch {}
     }
+    merchantId = merchantId || 'usr_merchant'
+    merchantHandle = merchantHandle || 'merchant'
 
     // Create conversation record
     const convRecord: MemConversation = {
       id: conversationId,
-      user_a: adminId,
+      user_a: merchantId,
       user_b: inquiry.sender_user_id || inquiry.sender_handle,
       remote_handle: inquiry.sender_handle,
       remote_instance_url: inquiry.sender_origin_url,
@@ -315,7 +331,7 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
     const msgRecord: MemMessage = {
       id: messageId,
       conversation_id: conversationId,
-      sender_id: inquiry.sender_handle,
+      sender_id: inquiry.sender_user_id || inquiry.sender_handle,
       content: inquiry.content,
       created_at: now,
       read_at: now,
@@ -328,7 +344,7 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
       const friendshipId = 'fr_priv_' + Math.random().toString(36).slice(2, 9)
       friendshipRecord = {
         id: friendshipId,
-        local_user_id: adminId,
+        local_user_id: merchantId,
         remote_handle: inquiry.sender_handle,
         remote_instance_url: inquiry.sender_origin_url,
         status: 'active',
@@ -347,7 +363,7 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
           .bind(msgRecord.id, msgRecord.conversation_id, msgRecord.sender_id, msgRecord.content, now, now).run()
         if (friendshipRecord) {
           await db.prepare('INSERT OR REPLACE INTO federation_friendships (id, local_user_id, remote_handle, remote_instance_url, status, direction, created_at) VALUES (?, ?, ?, ?, "active", "outgoing", ?)')
-            .bind(friendshipRecord.id, adminId, inquiry.sender_handle, inquiry.sender_origin_url, now).run()
+            .bind(friendshipRecord.id, merchantId, inquiry.sender_handle, inquiry.sender_origin_url, now).run()
         }
       } catch (d1Err: any) {
         console.warn('[D1 Reply Convert Warning]', d1Err?.message)
@@ -362,7 +378,7 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
       conversationId: conversationId,
       senderId: inquiry.sender_handle,
       senderHandle: inquiry.sender_handle,
-      recipientHandle: adminHandle,
+      recipientHandle: merchantHandle,
       body: inquiry.content,
       createdAt: new Date(now).toISOString(),
     }, c.env)

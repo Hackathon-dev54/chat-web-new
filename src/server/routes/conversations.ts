@@ -5,7 +5,7 @@ import type { Bindings } from '../types'
 
 const conversationRoutes = new Hono<{ Bindings: Bindings }>()
 
-function resolveOtherUser(row: any, viewer: any, shopHandle: string, shopDisplayName: string) {
+function resolveOtherUser(row: any, viewer: any, fallbackShopHandle: string, fallbackShopDisplayName: string) {
   const viewerHandle = (viewer?.handle || '').toLowerCase().replace(/^@/, '')
   const viewerId = viewer?.id || ''
   const userBHandle = (row.remote_handle || row.user_b || '').toLowerCase().replace(/^@/, '')
@@ -19,18 +19,24 @@ function resolveOtherUser(row: any, viewer: any, shopHandle: string, shopDisplay
 
   if (isCustomerViewer) {
     // Other participant is the business merchant / shop
+    const merchantUser = row.user_a ? memoryStore.users.get(row.user_a) : null
+    const actualHandle = merchantUser?.handle || fallbackShopHandle
+    const actualDisplayName = merchantUser?.display_name || fallbackShopDisplayName || `@${actualHandle}`
     return {
       id: row.user_a,
-      username: shopHandle,
-      displayName: shopDisplayName || `@${shopHandle}`,
+      username: actualHandle,
+      displayName: actualDisplayName,
     }
   }
 
   // Other participant is the customer / remote peer
+  const customerUser = row.user_b ? memoryStore.users.get(row.user_b) : null
+  const custHandle = customerUser?.handle || row.remote_handle || row.user_b
+  const custDisplayName = customerUser?.display_name || (row.remote_handle ? `@${row.remote_handle}` : row.user_b)
   return {
     id: row.user_b,
-    username: row.remote_handle || row.user_b,
-    displayName: row.remote_handle ? `@${row.remote_handle}` : row.user_b,
+    username: custHandle,
+    displayName: custDisplayName,
   }
 }
 
