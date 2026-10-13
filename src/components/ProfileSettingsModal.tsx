@@ -18,6 +18,7 @@ import {
   CheckCircle2,
   AlertCircle,
   ExternalLink,
+  Download,
 } from 'lucide-react'
 
 export interface ProfileData {
@@ -872,6 +873,28 @@ export function ProfileSettingsModal({
                       <span>Cryptographic Key:</span>
                       <span className="font-mono text-[#8696a0]">ECDSA P-256 (Ed25519 compatible)</span>
                     </div>
+                  </div>
+
+                  {/* Standalone Chatze Hub Codebase Download */}
+                  <div className="p-3 bg-gradient-to-r from-[#182229] to-[#111b21] border border-[#2a3942] rounded-xl flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-white font-semibold text-xs flex items-center gap-1.5">
+                        <Store className="w-3.5 h-3.5 text-[#00a884]" />
+                        <span>Chatze Hub Project Codebase</span>
+                      </p>
+                      <p className="text-[#8696a0] text-[10px] mt-0.5 truncate">
+                        Self-contained Cloudflare D1 + Hono + Vite gateway ready for deployment
+                      </p>
+                    </div>
+                    <a
+                      href="/chatze-hub.zip"
+                      download="chatze-hub.zip"
+                      className="px-3 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold text-xs rounded-lg flex items-center gap-1.5 shrink-0 transition-colors shadow-sm"
+                      title="Download chatze-hub.zip"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download .zip</span>
+                    </a>
                   </div>
                 </div>
               )}

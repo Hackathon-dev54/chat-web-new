@@ -8,6 +8,7 @@ import {
   PlusCircle,
   Sparkles,
   Server,
+  Download,
 } from 'lucide-react'
 import type { HubUser } from '../server/types'
 
@@ -51,6 +52,17 @@ export function Navbar({
 
         {/* Right Action Bar */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Download Zip Button */}
+          <a
+            href="/chatze-hub.zip"
+            download="chatze-hub.zip"
+            className="flex items-center gap-1.5 text-xs text-[#8696a0] hover:text-white bg-[#182229] hover:bg-[#202c33] border border-[#2a3942] px-3 py-1.5 rounded-xl transition-colors font-medium cursor-pointer"
+            title="Download full Chatze Hub codebase as .zip"
+          >
+            <Download className="w-3.5 h-3.5 text-[#00a884]" />
+            <span className="hidden sm:inline">Download Hub Zip</span>
+          </a>
+
           {/* List Your Store Button */}
           <button
             onClick={onOpenRegisterStore}
