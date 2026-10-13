@@ -1148,6 +1148,15 @@ export function MessagingApp({
               >
                 <Settings className="w-4 h-4" />
               </button>
+              <a
+                href="/hub"
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Browse Chatze Hub Directory (Discover Sovereign Stores)"
+                className="p-2 rounded-full text-[#8696a0] hover:text-[#00a884] hover:bg-[#202c33] transition-colors"
+              >
+                <Store className="w-4 h-4" />
+              </a>
               <button
                 onClick={() => setShowIdentityModal(true)}
                 title="My Instance Address / Share"
@@ -1356,10 +1365,10 @@ export function MessagingApp({
                         <span className="font-bold text-xs text-[#e9edef]">My Customer Letterbox</span>
                       </div>
                       <a
-                        href="/shop"
+                        href="/hub"
                         className="text-[10px] bg-[#00a884]/20 text-[#00a884] hover:bg-[#00a884]/30 px-2 py-0.5 rounded font-bold border border-[#00a884]/30 flex items-center gap-1 cursor-pointer"
                       >
-                        <span>+ Drop Note</span>
+                        <span>+ Explore Hub</span>
                         <ExternalLink className="w-2.5 h-2.5" />
                       </a>
                     </div>
@@ -1464,13 +1473,13 @@ export function MessagingApp({
                       <Store className="w-8 h-8 mx-auto text-purple-400/60" />
                       <p className="font-semibold text-[#e9edef]">No Letterbox Notes Yet</p>
                       <p className="text-[11px] text-[#8696a0] max-w-xs mx-auto">
-                        You haven't dropped any notes to shops. Visit a shop portfolio to inquire about prices, stock, or deliveries!
+                        You haven't dropped any notes to shops. Explore verified stores on Chatze Hub to inquire about products and services!
                       </p>
                       <a
-                        href="/shop"
+                        href="/hub"
                         className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#00a884] text-[#111b21] rounded-xl font-bold text-xs hover:bg-[#02906f] transition-all cursor-pointer shadow-md"
                       >
-                        <span>Visit Shop Letterbox</span>
+                        <span>Explore Stores on Chatze Hub</span>
                         <ArrowRight className="w-3.5 h-3.5" />
                       </a>
                     </div>
@@ -1479,6 +1488,39 @@ export function MessagingApp({
               ) : (
                 /* BUSINESS ACCOUNT LETTERBOX */
                 <div className="space-y-3">
+                  {/* Chatze Hub Integration Status Bar */}
+                  <div className="p-3 bg-[#111b21] border border-[#202c33] rounded-xl flex items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Store className="w-4 h-4 text-[#00a884] shrink-0" />
+                      <div className="min-w-0">
+                        <span className="font-bold text-[#e9edef] block truncate">
+                          Chatze Hub Gateway Active
+                        </span>
+                        <span className="text-[10px] text-[#8696a0] block truncate">
+                          Inquiries arrive via spam-shielded Google Auth embed
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <a
+                        href={`/hub?shop=${currentUser.handle}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#00a884] rounded-lg text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <span>Preview on Hub</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                      <button
+                        onClick={() => setShowProfileModal(true)}
+                        className="p-1 text-[#8696a0] hover:text-[#e9edef] bg-[#202c33] hover:bg-[#2a3942] rounded-lg cursor-pointer"
+                        title="Hub Settings"
+                      >
+                        <Settings className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
                   {inquiries.length === 0 ? (
                     <div className="p-8 text-center text-xs text-[#8696a0] space-y-2 bg-[#111b21] rounded-2xl border border-[#202c33]">
                       <Store className="w-8 h-8 mx-auto text-[#8696a0]/40 mb-2" />

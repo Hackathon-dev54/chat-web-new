@@ -1,0 +1,71 @@
+name = "chatze-hub"
+main = "src/server/index.ts"
+compatibility_date = "2024-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[site]
+bucket = "./dist"
+
+# ==============================================================================
+# Cloudflare D1 Sharded Database Bindings (10 Free Databases)
+# ==============================================================================
+
+# Shard 0: Meta, Config & Rate Limiting
+[[d1_databases]]
+binding = "DB_HUB_META"
+database_name = "chatze-hub-meta"
+database_id = "placeholder-meta-id"
+
+# Shard 1: Business Directory & Embed Registry
+[[d1_databases]]
+binding = "DB_DIRECTORY"
+database_name = "chatze-hub-directory"
+database_id = "placeholder-directory-id"
+
+# Shards 2 to 9: User Profiles (Consistent Hashing by Google Sub)
+[[d1_databases]]
+binding = "DB_USERS_0"
+database_name = "chatze-hub-users-0"
+database_id = "placeholder-users-0-id"
+
+[[d1_databases]]
+binding = "DB_USERS_1"
+database_name = "chatze-hub-users-1"
+database_id = "placeholder-users-1-id"
+
+[[d1_databases]]
+binding = "DB_USERS_2"
+database_name = "chatze-hub-users-2"
+database_id = "placeholder-users-2-id"
+
+[[d1_databases]]
+binding = "DB_USERS_3"
+database_name = "chatze-hub-users-3"
+database_id = "placeholder-users-3-id"
+
+[[d1_databases]]
+binding = "DB_USERS_4"
+database_name = "chatze-hub-users-4"
+database_id = "placeholder-users-4-id"
+
+[[d1_databases]]
+binding = "DB_USERS_5"
+database_name = "chatze-hub-users-5"
+database_id = "placeholder-users-5-id"
+
+[[d1_databases]]
+binding = "DB_USERS_6"
+database_name = "chatze-hub-users-6"
+database_id = "placeholder-users-6-id"
+
+[[d1_databases]]
+binding = "DB_USERS_7"
+database_name = "chatze-hub-users-7"
+database_id = "placeholder-users-7-id"
+
+[vars]
+ENVIRONMENT = "production"
+HUB_NAME = "Chatze Hub Gateway (Nepal)"
+# Google OAuth Client ID for consumer authentication (anti-bot)
+GOOGLE_CLIENT_ID = ""
+JWT_SECRET = "chatze-hub-ed25519-secret-key-change-in-production"

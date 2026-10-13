@@ -23,6 +23,8 @@ import {
   LogIn,
   UserPlus,
   X,
+  Compass,
+  ShieldAlert,
 } from 'lucide-react'
 
 interface ShopProfile {
@@ -37,6 +39,8 @@ interface ShopProfile {
   deliveryInfo?: string
   catalogTags?: string
   inquiryLetterboxEnabled: boolean
+  hubListed?: boolean
+  hubNodeId?: string
 }
 
 interface CustomerInquiryPageProps {
@@ -65,6 +69,8 @@ export function CustomerInquiryPage({
   const [selectedCategory, setSelectedCategory] = useState('🏷️ Price & Stock')
   const [senderName, setSenderName] = useState(currentUser?.display_name || '')
   const [senderContact, setSenderContact] = useState(currentUser?.handle ? `@${currentUser.handle}` : '')
+  const [senderEmail, setSenderEmail] = useState('')
+  const [sovereignNode, setSovereignNode] = useState('')
   const [noteContent, setNoteContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
@@ -72,18 +78,41 @@ export function CustomerInquiryPage({
   const [errorMessage, setErrorMessage] = useState('')
   const [copiedShare, setCopiedShare] = useState(false)
 
-  // In-page quick authentication modal state
-  const [showAuthModal, setShowAuthModal] = useState(false)
-  const [authMode, setAuthMode] = useState<'signin' | 'register'>('signin')
-  const [authUsername, setAuthUsername] = useState('')
-  const [authPassword, setAuthPassword] = useState('')
-  const [authDisplayName, setAuthDisplayName] = useState('')
-  const [authLoading, setAuthLoading] = useState(false)
-  const [authError, setAuthError] = useState('')
+  // Redirect state for direct browser visits (must go through Chatze Hub)
+  const [redirectCountdown, setRedirectCountdown] = useState(3)
 
-  // 1. Load shop profile & detect existing auth session
+  // Embedding context detection
+  const isIframe = typeof window !== 'undefined' && window.self !== window.top
+  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
+  const isChatzeHubEmbed = urlParams?.get('embed') === 'chatze_hub'
+
+  // The official Hub target URL for redirection
+  const hubRedirectUrl = `/hub?shop=${encodeURIComponent(shopHandle)}&target=letterbox`
+
+  // 1. Direct browser visit redirection countdown
+  useEffect(() => {
+    if (!isIframe) {
+      const timer = setInterval(() => {
+        setRedirectCountdown((prev) => {
+          if (prev <= 1) {
+            clearInterval(timer)
+            if (typeof window !== 'undefined') {
+              window.location.href = hubRedirectUrl
+            }
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+      return () => clearInterval(timer)
+    }
+  }, [isIframe, hubRedirectUrl])
+
+  // 2. Load shop profile & detect existing auth session
   useEffect(() => {
     async function loadData() {
+      let resolvedUser: any = currentUser
+
       try {
         const res = await fetch('/api/profile')
         if (res.ok) {
@@ -93,9 +122,31 @@ export function CustomerInquiryPage({
           }
         }
 
-        // If currentUser was not passed directly, verify stored token
-        const token = localStorage.getItem('chatze_auth_token')
-        let resolvedUser = currentUser
+        // Check URL query params passed from Chatze Hub embed
+        const hubUserName = urlParams?.get('hub_user_name')
+        const hubUserEmail = urlParams?.get('hub_user_email')
+        const hubSovereignNode = urlParams?.get('hub_sovereign_node')
+        const hubSovereignHandle = urlParams?.get('hub_sovereign_handle')
+        const hubToken = urlParams?.get('hub_token')
+
+        if (hubUserName && !resolvedUser) {
+          const hubAuthedUser = {
+            id: `usr_hub_${(hubUserEmail || hubUserName).replace(/[^a-z0-9]/gi, '_').toLowerCase()}`,
+            handle: hubSovereignHandle || (hubUserEmail ? hubUserEmail.split('@')[0] : 'google_user'),
+            display_name: hubUserName,
+            email: hubUserEmail || undefined,
+            sovereign_node_url: hubSovereignNode || undefined,
+            is_hub_user: true,
+          }
+          resolvedUser = hubAuthedUser
+          setAuthedUser(hubAuthedUser)
+          setSenderName(hubUserName)
+          if (hubUserEmail) setSenderEmail(hubUserEmail)
+          if (hubSovereignNode) setSovereignNode(hubSovereignNode)
+          setSenderContact(hubSovereignHandle ? `@${hubSovereignHandle}` : (hubUserEmail || `@${hubUserName.toLowerCase().replace(/\s+/g, '_')}`))
+        }
+
+        const token = localStorage.getItem('chatze_auth_token') || hubToken
         if (!resolvedUser && token) {
           try {
             const sRes = await fetch('/api/auth/session', {
@@ -143,75 +194,17 @@ export function CustomerInquiryPage({
 
   const handleCopyLink = () => {
     if (typeof window !== 'undefined') {
-      const url = window.location.href
+      const url = `${window.location.origin}/hub?shop=${encodeURIComponent(shopHandle)}`
       navigator.clipboard.writeText(url)
       setCopiedShare(true)
       setTimeout(() => setCopiedShare(false), 2500)
     }
   }
 
-  const handleQuickAuth = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setAuthLoading(true)
-    setAuthError('')
-
-    const cleanHandle = authUsername.replace(/^@/, '').trim().toLowerCase()
-    if (!cleanHandle) {
-      setAuthError('Please enter a username')
-      setAuthLoading(false)
-      return
-    }
-
-    try {
-      const endpoint = authMode === 'signin' ? '/api/auth/sign-in' : '/api/auth/register'
-      const payload = authMode === 'signin'
-        ? { username: cleanHandle, password: authPassword }
-        : { username: cleanHandle, displayName: authDisplayName.trim() || cleanHandle, password: authPassword }
-
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      const data = await res.json()
-      if (res.ok && data.user) {
-        if (data.token) {
-          localStorage.setItem('chatze_auth_token', data.token)
-        }
-        setAuthedUser(data.user)
-        setSenderName(data.user.display_name)
-        setSenderContact(`@${data.user.handle}`)
-        setShowAuthModal(false)
-
-        // Check if this newly signed in user has an existing inquiry
-        try {
-          const inqRes = await fetch('/api/inquiries', {
-            headers: data.token ? { Authorization: `Bearer ${data.token}` } : {},
-          })
-          if (inqRes.ok) {
-            const inqData = await inqRes.json()
-            if (inqData.inquiries && inqData.inquiries.length > 0) {
-              const myNote = inqData.inquiries.find(
-                (i: any) =>
-                  i.status === 'pending' ||
-                  i.sender_handle === data.user.handle ||
-                  i.sender_user_id === data.user.id
-              )
-              if (myNote) {
-                setExistingInquiry(myNote)
-                setSubmitted(true)
-              }
-            }
-          }
-        } catch {}
-      } else {
-        setAuthError(data.error || 'Authentication failed')
-      }
-    } catch (err: any) {
-      setAuthError(err?.message || 'Network error')
-    } finally {
-      setAuthLoading(false)
+  const handleTriggerHubLogin = () => {
+    if (typeof window !== 'undefined' && window.parent) {
+      // Send cross-origin safe postMessage to Chatze Hub parent modal
+      window.parent.postMessage({ type: 'CHATZE_REQUEST_GOOGLE_LOGIN', shop: shopHandle }, '*')
     }
   }
 
@@ -219,16 +212,15 @@ export function CustomerInquiryPage({
     e.preventDefault()
     if (!noteContent.trim()) return
 
-    if (!authedUser) {
-      setAuthMode('signin')
-      setShowAuthModal(true)
+    if (!authedUser && !senderName.trim()) {
+      handleTriggerHubLogin()
       return
     }
 
     setSubmitting(true)
     setErrorMessage('')
 
-    const token = localStorage.getItem('chatze_auth_token')
+    const token = localStorage.getItem('chatze_auth_token') || urlParams?.get('hub_token')
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (token) headers['Authorization'] = `Bearer ${token}`
 
@@ -238,13 +230,14 @@ export function CustomerInquiryPage({
         headers,
         body: JSON.stringify({
           shopHandle,
-          senderName: authedUser.display_name,
-          senderHandle: authedUser.handle,
-          senderUserId: authedUser.id,
+          senderName: authedUser?.display_name || senderName,
+          senderHandle: authedUser?.handle || 'google_user',
+          senderUserId: authedUser?.id,
+          senderEmail: authedUser?.email || senderEmail,
           contactPhone: senderContact.startsWith('@') ? '' : senderContact,
           category: selectedCategory,
           content: noteContent.trim(),
-          senderOriginUrl: window.location.origin,
+          senderOriginUrl: sovereignNode || window.location.origin,
         }),
       })
 
@@ -261,7 +254,7 @@ export function CustomerInquiryPage({
         localStorage.setItem(`chatze_inq_${shopHandle}`, 'true')
       } else {
         if (data.code === 'AUTH_REQUIRED') {
-          setShowAuthModal(true)
+          handleTriggerHubLogin()
         }
         setErrorMessage(data.error || 'Failed to submit inquiry')
       }
@@ -272,34 +265,165 @@ export function CustomerInquiryPage({
     }
   }
 
-  const handleNavigateToLetterbox = () => {
-    if (onGoToApp) {
-      onGoToApp()
-      return
-    }
-    if (typeof window !== 'undefined') {
-      window.location.href = '/?tab=letterbox'
-    }
+  // ==========================================================================
+  // SCENARIO 1: DIRECT BROWSER VISIT -> AUTO-REDIRECT TO CHATZE HUB
+  // ==========================================================================
+  if (!isIframe) {
+    return (
+      <div className="min-h-screen bg-[#0b141a] text-[#e9edef] flex flex-col items-center justify-center p-4 font-sans selection:bg-[#00a884]/30">
+        <div className="max-w-md w-full bg-[#111b21] border border-[#222e35] rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-5 animate-fadeIn">
+          <div className="w-16 h-16 rounded-2xl bg-[#00a884]/15 border border-[#00a884]/30 flex items-center justify-center mx-auto text-[#00a884] shadow-inner">
+            <Lock className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#00a884]/10 border border-[#00a884]/30 text-[#00a884] text-xs font-semibold">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Spam-Shielded Letterbox</span>
+            </div>
+            <h1 className="text-xl font-bold text-white tracking-tight">
+              Redirecting to Chatze Hub...
+            </h1>
+            <p className="text-xs text-[#8696a0] leading-relaxed">
+              Direct browser access to this Letterbox is protected. To safeguard merchants from automated spam, customer inquiries require verified Google identity on <strong>Chatze Hub</strong>.
+            </p>
+          </div>
+
+          <div className="p-4 bg-[#182229] border border-[#222e35] rounded-2xl space-y-2 text-left text-xs">
+            <div className="flex items-center justify-between text-[#8696a0]">
+              <span>Target Shop:</span>
+              <strong className="text-white font-mono">@{shopHandle}</strong>
+            </div>
+            <div className="flex items-center justify-between text-[#8696a0]">
+              <span>Redirecting in:</span>
+              <span className="text-[#00a884] font-bold font-mono">{redirectCountdown}s</span>
+            </div>
+          </div>
+
+          <div className="space-y-2 pt-2">
+            <a
+              href={hubRedirectUrl}
+              className="w-full py-3 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <span>Continue to Chatze Hub Now</span>
+              <ArrowRight className="w-4 h-4" />
+            </a>
+            <p className="text-[11px] text-[#8696a0]">
+              1-Tap Google Sign-In • Zero Message Bloat • Instant Inquiry
+            </p>
+          </div>
+        </div>
+      </div>
+    )
   }
 
+  // ==========================================================================
+  // SCENARIO 2: EMBEDDED IN UNAUTHORIZED EXTERNAL 3RD-PARTY IFRAME
+  // ==========================================================================
+  if (isIframe && !isChatzeHubEmbed) {
+    return (
+      <div className="min-h-screen bg-[#0b141a] text-[#e9edef] flex flex-col items-center justify-center p-4 font-sans">
+        <div className="max-w-md w-full bg-[#111b21] border border-rose-500/30 rounded-2xl p-6 text-center space-y-4">
+          <div className="w-12 h-12 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center mx-auto text-rose-400">
+            <ShieldAlert className="w-6 h-6" />
+          </div>
+          <h2 className="text-base font-bold text-white">Embedding Restricted</h2>
+          <p className="text-xs text-[#8696a0] leading-relaxed">
+            This sovereign Letterbox only permits embedding inside the official <strong>Chatze Hub</strong> application to protect customer and merchant privacy.
+          </p>
+          <a
+            href={hubRedirectUrl}
+            target="_top"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-[#00a884] text-[#111b21] rounded-xl font-bold text-xs hover:bg-[#02906f]"
+          >
+            <span>Open in Chatze Hub</span>
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        </div>
+      </div>
+    )
+  }
+
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#0b141a] flex flex-col items-center justify-center text-[#8696a0] gap-3 font-sans">
+        <div className="w-8 h-8 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin" />
+        <p className="text-xs font-medium tracking-wide">Connecting to Sovereign Letterbox...</p>
+      </div>
+    )
+  }
+
+  // ==========================================================================
+  // SCENARIO 3: MERCHANT HAS NOT LISTED THIS LETTERBOX ON CHATZE HUB (404)
+  // ==========================================================================
+  const isShopUnlisted = profile && profile.hubListed === false
+  if (isShopUnlisted) {
+    return (
+      <div className="min-h-screen bg-[#0b141a] text-[#e9edef] flex flex-col items-center justify-center p-4 font-sans selection:bg-[#00a884]/30">
+        <div className="max-w-md w-full bg-[#111b21] border border-[#222e35] rounded-3xl p-6 sm:p-8 shadow-2xl text-center space-y-5 animate-fadeIn">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+            <AlertCircle className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-2">
+            <span className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full">
+              404 • Unlisted Node
+            </span>
+            <h1 className="text-xl font-bold text-white tracking-tight">
+              Letterbox Not Listed on Chatze Hub
+            </h1>
+            <p className="text-xs text-[#8696a0] leading-relaxed">
+              The merchant (<strong>@{shopHandle}</strong>) has not published or verified this Letterbox in the Chatze Hub directory. Direct customer inquiries are currently disabled.
+            </p>
+          </div>
+
+          <div className="p-4 bg-[#182229] border border-[#222e35] rounded-2xl text-xs text-[#8696a0] space-y-2 text-left">
+            <div className="flex items-center gap-2 text-white font-semibold">
+              <Compass className="w-4 h-4 text-[#00a884]" />
+              <span>Looking for active stores?</span>
+            </div>
+            <p className="text-[11px] leading-relaxed">
+              Explore thousands of verified local Nepali handicraft makers, apparel stores, and eateries active on Chatze Hub.
+            </p>
+          </div>
+
+          <a
+            href="/hub"
+            target="_top"
+            className="w-full py-3 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <Compass className="w-4 h-4" />
+            <span>Browse Verified Shops on Chatze Hub</span>
+          </a>
+        </div>
+      </div>
+    )
+  }
+
+  // ==========================================================================
+  // SCENARIO 4: AUTHORIZED CHATZE HUB EMBED (CUSTOMER INQUIRY CARD)
+  // ==========================================================================
   const tagsList = profile?.catalogTags
     ? profile.catalogTags.split(',').map((t) => t.trim()).filter(Boolean)
     : ['Authentic Products', 'Inside Valley Delivery', 'Nationwide Courier', 'Fast Response']
 
   return (
     <div className="min-h-screen bg-[#0b141a] text-[#e9edef] flex flex-col justify-between font-sans selection:bg-[#00a884]/30">
-      {/* Top Navigation Header */}
-      <header className="border-b border-[#202c33] bg-[#111b21]/80 backdrop-blur-md sticky top-0 z-20">
-        <div className="max-w-4xl w-full mx-auto px-4 py-3 flex items-center justify-between">
+      {/* Top Header Banner */}
+      <header className="border-b border-[#202c33] bg-[#111b21] sticky top-0 z-20">
+        <div className="max-w-4xl w-full mx-auto px-4 py-2.5 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[#00a884]/20 border border-[#00a884]/40 flex items-center justify-center text-[#00a884] font-black text-xs shadow-sm">
+            <div className="w-7 h-7 rounded-lg bg-[#00a884]/20 border border-[#00a884]/40 flex items-center justify-center text-[#00a884] font-black text-xs">
               CZ
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-extrabold text-sm tracking-wide text-[#e9edef]">Chatze Nepal</span>
+                <span className="font-bold text-xs tracking-wide text-[#e9edef]">
+                  {profile?.displayName || 'Chatze Sovereign Store'}
+                </span>
                 <span className="text-[10px] bg-[#00a884]/15 text-[#00a884] border border-[#00a884]/30 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                  <BadgeCheck className="w-3 h-3" /> Verified Shop
+                  <BadgeCheck className="w-3 h-3" /> Hub Verified
                 </span>
               </div>
             </div>
@@ -308,525 +432,235 @@ export function CustomerInquiryPage({
           <div className="flex items-center gap-2">
             <button
               onClick={handleCopyLink}
-              title="Share portfolio link"
-              className="px-2.5 py-1.5 bg-[#202c33] hover:bg-[#2a3942] text-[#8696a0] hover:text-[#e9edef] text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Share store link"
+              className="px-2.5 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#8696a0] hover:text-[#e9edef] text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
             >
               {copiedShare ? (
                 <>
-                  <Check className="w-3.5 h-3.5 text-[#00a884]" />
-                  <span className="text-[#00a884]">Link Copied</span>
+                  <Check className="w-3 h-3 text-[#00a884]" />
+                  <span className="text-[#00a884] text-[11px]">Copied</span>
                 </>
               ) : (
                 <>
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Share Shop</span>
+                  <Copy className="w-3 h-3" />
+                  <span className="text-[11px]">Share</span>
                 </>
               )}
             </button>
-
-            {authedUser ? (
-              <button
-                onClick={handleNavigateToLetterbox}
-                className="px-3 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
-              >
-                <MessageSquare className="w-3.5 h-3.5" />
-                <span>My Messages</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => {
-                  setAuthMode('signin')
-                  setShowAuthModal(true)
-                }}
-                className="px-3 py-1.5 bg-[#202c33] hover:bg-[#2a3942] text-[#00a884] border border-[#00a884]/40 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                <span>Sign In</span>
-              </button>
-            )}
           </div>
         </div>
       </header>
 
-      {/* Main Content Container */}
-      <main className="max-w-4xl w-full mx-auto p-4 sm:p-6 flex-1 flex flex-col justify-center">
-        {loading ? (
-          <div className="p-12 text-center space-y-3">
-            <div className="w-8 h-8 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin mx-auto"></div>
-            <p className="text-xs text-[#8696a0]">Loading Shop Profile & Letterbox...</p>
+      {/* Main Content Area */}
+      <main className="max-w-3xl w-full mx-auto px-4 py-4 flex-1 space-y-4">
+        {/* Merchant Info Card */}
+        <div className="bg-[#111b21] border border-[#202c33] rounded-2xl p-4 sm:p-5 space-y-3 shadow-md">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                  {profile?.displayName || 'Sovereign Merchant'}
+                </h1>
+                <span className="text-xs text-[#8696a0] font-mono">@{profile?.handle || shopHandle}</span>
+              </div>
+              <p className="text-xs text-[#8696a0] leading-relaxed">
+                {profile?.bio || 'Welcome to our official sovereign storefront. Drop an inquiry note below for quick assistance.'}
+              </p>
+            </div>
+            <div className="w-12 h-12 rounded-xl bg-[#182229] border border-[#2a3942] flex items-center justify-center text-[#00a884] flex-shrink-0">
+              <Store className="w-6 h-6" />
+            </div>
+          </div>
+
+          {/* Quick Store Highlights */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-1 border-t border-[#202c33] text-[11px] text-[#8696a0]">
+            <div className="flex items-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5 text-[#00a884]" />
+              <span className="truncate">{profile?.businessLocation || 'Kathmandu, Nepal'}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-[#00a884]" />
+              <span className="truncate">{profile?.businessHours || 'Open Regular Hours'}</span>
+            </div>
+            <div className="flex items-center gap-1.5 col-span-2 sm:col-span-1">
+              <Truck className="w-3.5 h-3.5 text-[#00a884]" />
+              <span className="truncate">{profile?.deliveryInfo || 'Valley & Nationwide'}</span>
+            </div>
+          </div>
+
+          {/* Catalog Tags */}
+          {tagsList.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pt-1">
+              {tagsList.map((tag, idx) => (
+                <span
+                  key={idx}
+                  className="px-2 py-0.5 rounded-md bg-[#182229] border border-[#222e35] text-[10px] text-[#8696a0]"
+                >
+                  #{tag}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* GOOGLE SIGN-IN REQUIREMENT CHECK */}
+        {!authedUser && !senderName ? (
+          <div className="bg-[#111b21] border border-amber-500/30 rounded-2xl p-6 text-center space-y-4 shadow-lg">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+              <Lock className="w-6 h-6" />
+            </div>
+            <div className="space-y-1.5">
+              <h2 className="text-base font-bold text-white">Google Sign-In Required on Chatze Hub</h2>
+              <p className="text-xs text-[#8696a0] max-w-md mx-auto leading-relaxed">
+                To prevent automated spam and guarantee customer authenticity, inquiries require a verified Google identity. Sign in with Google on Chatze Hub to unlock the 1-Card inquiry box.
+              </p>
+            </div>
+            <button
+              onClick={handleTriggerHubLogin}
+              className="px-6 py-2.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-xl text-xs transition-all shadow-md inline-flex items-center gap-2 cursor-pointer"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Sign In with Google on Chatze Hub</span>
+            </button>
+          </div>
+        ) : submitted || existingInquiry ? (
+          /* SUBMITTED CONFIRMATION CARD */
+          <div className="bg-[#111b21] border border-[#00a884]/40 rounded-2xl p-5 sm:p-6 space-y-4 shadow-lg text-center animate-fadeIn">
+            <div className="w-12 h-12 rounded-2xl bg-[#00a884]/20 border border-[#00a884]/40 flex items-center justify-center mx-auto text-[#00a884]">
+              <CheckCircle2 className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h2 className="text-base font-bold text-white">Inquiry Note Safely Placed in Letterbox!</h2>
+              <p className="text-xs text-[#8696a0] max-w-md mx-auto">
+                Your 1-card note is recorded directly in <strong>{profile?.displayName}</strong>'s edge database. You will be notified once the owner reviews and accepts your request.
+              </p>
+            </div>
+
+            <div className="p-3 bg-[#182229] border border-[#222e35] rounded-xl text-left text-xs space-y-2 max-w-md mx-auto">
+              <div className="flex items-center justify-between text-[11px] text-[#8696a0]">
+                <span>Status:</span>
+                <span className="font-semibold text-amber-400 uppercase tracking-wider">
+                  {existingInquiry?.status === 'accepted' ? 'Accepted (Chat Open)' : 'Pending Review'}
+                </span>
+              </div>
+              <p className="p-2.5 bg-[#0b141a] rounded-lg text-[#e9edef] text-xs border border-[#222e35] font-sans leading-relaxed">
+                "{existingInquiry?.content || noteContent}"
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <span className="text-[11px] text-[#8696a0] flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-[#00a884]" />
+                1-Card Protection Active (Zero Flooding)
+              </span>
+            </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            {/* Left Column: Merchant Profile & Catalog Card */}
-            <div className="lg:col-span-5 space-y-4">
-              <div className="bg-[#111b21] border border-[#202c33] rounded-2xl p-5 sm:p-6 shadow-xl space-y-5">
-                <div className="flex items-start gap-3.5">
-                  <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#00a884] to-[#00725a] flex items-center justify-center font-extrabold text-xl text-[#111b21] shadow-lg shrink-0">
-                    {(profile?.displayName || 'Chatze').slice(0, 2).toUpperCase()}
-                  </div>
-                  <div className="min-w-0">
-                    <h1 className="text-lg font-bold text-[#e9edef] truncate leading-tight">
-                      {profile?.displayName || 'Chatze Verified Shop'}
-                    </h1>
-                    <div className="flex items-center gap-1.5 text-xs text-[#8696a0] mt-0.5">
-                      <span className="w-2 h-2 rounded-full bg-[#00a884]"></span>
-                      <span className="font-mono">@{profile?.handle || shopHandle}</span>
-                    </div>
-                    <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-[#00a884]/15 text-[#00a884] border border-[#00a884]/30">
-                      {profile?.businessCategory || 'Nepal Merchant Hub'}
-                    </span>
-                  </div>
-                </div>
-
-                <p className="text-xs text-[#8696a0] leading-relaxed bg-[#0b141a] p-3 rounded-xl border border-[#202c33]/70">
-                  {profile?.bio ||
-                    'Welcome to our official business storefront on Chatze. Use our zero-spam letterbox below to inquire about products, pricing, bulk orders, or valley delivery.'}
-                </p>
-
-                {/* Shop Highlights */}
-                <div className="space-y-2.5 text-xs text-[#8696a0]">
-                  {profile?.businessLocation && (
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-[#00a884] shrink-0" />
-                      <span className="text-[#e9edef]">{profile.businessLocation}</span>
-                    </div>
-                  )}
-                  {profile?.businessPhone && (
-                    <div className="flex items-center gap-2">
-                      <Phone className="w-4 h-4 text-[#00a884] shrink-0" />
-                      <a href={`tel:${profile.businessPhone}`} className="text-[#00a884] hover:underline font-semibold">
-                        {profile.businessPhone}
-                      </a>
-                    </div>
-                  )}
-                  {profile?.deliveryInfo && (
-                    <div className="flex items-center gap-2">
-                      <Truck className="w-4 h-4 text-[#00a884] shrink-0" />
-                      <span className="text-[#e9edef]">{profile.deliveryInfo}</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Catalog & Tags Badges */}
-                <div className="space-y-2 pt-1 border-t border-[#202c33]">
-                  <span className="text-[10px] font-bold text-[#8696a0] uppercase tracking-wider block">
-                    Product & Service Tags
-                  </span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {tagsList.map((tag, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2.5 py-1 rounded-lg bg-[#202c33] border border-[#222e35] text-[11px] text-[#e9edef] flex items-center gap-1 font-medium"
-                      >
-                        <Tag className="w-3 h-3 text-[#00a884]" />
-                        <span>{tag}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Trust & Guarantee Badges */}
-                <div className="p-3 bg-gradient-to-r from-[#00a884]/10 to-purple-500/10 border border-[#00a884]/20 rounded-xl space-y-1.5">
-                  <div className="flex items-center gap-2 text-xs font-bold text-[#00a884]">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Fast Customer Response</span>
-                  </div>
-                  <p className="text-[11px] text-[#8696a0] leading-snug">
-                    Customer inquiries trigger instant push notifications directly to the owner's phone. No bot spam, no lost messages.
-                  </p>
-                </div>
+          /* 1-CARD INQUIRY COMPOSITION BOX */
+          <div className="bg-[#111b21] border border-[#202c33] rounded-2xl p-5 sm:p-6 space-y-4 shadow-lg">
+            {/* Identity Badge Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-[#202c33] flex-wrap gap-2 text-xs">
+              <div className="flex items-center gap-2 text-[#8696a0]">
+                <ShieldCheck className="w-4 h-4 text-[#00a884]" />
+                <span>
+                  Inquiring as: <strong className="text-white">{senderName || authedUser?.display_name}</strong>
+                </span>
+                {senderEmail && (
+                  <span className="text-[10px] text-[#8696a0] font-mono">({senderEmail})</span>
+                )}
               </div>
+              {sovereignNode && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#00a884]/10 text-[#00a884] border border-[#00a884]/30 text-[10px]">
+                  <Sparkles className="w-3 h-3" />
+                  Sovereign Node Linked
+                </span>
+              )}
             </div>
 
-            {/* Right Column: Interactive Letterbox Inquiry Card */}
-            <div className="lg:col-span-7">
-              <div className="bg-[#111b21] border border-[#202c33] rounded-2xl p-5 sm:p-7 shadow-2xl space-y-6">
-                <div>
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-base font-extrabold text-[#e9edef] flex items-center gap-2">
-                      <MessageSquare className="w-4 h-4 text-[#00a884]" />
-                      Customer Inquiry Letterbox
-                    </h2>
-                    <span className="text-[10px] bg-purple-500/20 text-purple-300 font-bold px-2 py-0.5 rounded-full border border-purple-500/30">
-                      1-Card Anti-Spam Gate
-                    </span>
-                  </div>
-                  <p className="text-xs text-[#8696a0] mt-1 leading-relaxed">
-                    Ask about price, stock availability, custom orders, or delivery location. Zero spam, directly delivered!
-                  </p>
-                </div>
+            {errorMessage && (
+              <div className="p-3 bg-red-950/40 border border-red-800/50 rounded-xl text-red-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+            )}
 
-                {/* Authenticated Customer Identity Card (Suraj Singh / Verified Customer) */}
-                {authedUser ? (
-                  <div className="p-3.5 bg-gradient-to-r from-[#00a884]/15 via-[#111b21] to-purple-950/20 border border-[#00a884]/40 rounded-xl flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-full bg-[#00a884]/20 border border-[#00a884]/50 flex items-center justify-center font-bold text-xs text-[#00a884] shrink-0">
-                        {authedUser.display_name.slice(0, 2).toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-xs font-bold text-[#e9edef] flex items-center gap-1.5 truncate">
-                          <span className="truncate">{authedUser.display_name}</span>
-                          <span className="text-[10px] bg-[#00a884]/20 text-[#00a884] px-1.5 py-0.5 rounded font-mono font-bold shrink-0">
-                            @{authedUser.handle}
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-[#8696a0] mt-0.5 truncate">
-                          Verified Account • Replies route directly to your Letterbox
-                        </p>
-                      </div>
-                    </div>
-
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {/* Category Selection */}
+              <div>
+                <label className="block text-xs font-semibold text-[#aebac1] mb-1.5">
+                  Select Topic
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {INQUIRY_CATEGORIES.map((cat) => (
                     <button
+                      key={cat.id}
                       type="button"
-                      onClick={handleNavigateToLetterbox}
-                      className="text-[11px] font-bold text-[#00a884] hover:underline flex items-center gap-1 shrink-0 cursor-pointer"
+                      onClick={() => setSelectedCategory(cat.label)}
+                      className={`p-2 rounded-xl text-xs font-medium text-left transition-all border cursor-pointer ${
+                        selectedCategory === cat.label
+                          ? 'bg-[#00a884]/15 border-[#00a884] text-white shadow-sm'
+                          : 'bg-[#182229] border-[#222e35] text-[#8696a0] hover:text-white hover:border-[#2a3942]'
+                      }`}
                     >
-                      <span>My Chats</span>
-                      <ArrowRight className="w-3 h-3" />
+                      <div className="font-semibold truncate">{cat.label}</div>
                     </button>
-                  </div>
-                ) : (
-                  /* Account Required Banner (Guarantees Customer Receives Replies) */
-                  <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2.5">
-                    <div className="flex items-start gap-2.5">
-                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                      <div className="space-y-1">
-                        <p className="text-xs font-bold text-amber-300">
-                          Account Login Required
-                        </p>
-                        <p className="text-[11px] text-[#8696a0] leading-relaxed">
-                          To protect shops from spam and guarantee that you receive the owner’s real-time replies in your Letterbox, you must be logged in to Chatze.
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAuthMode('signin')
-                          setShowAuthModal(true)
-                        }}
-                        className="px-3.5 py-1.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-lg text-xs transition-all cursor-pointer shadow-sm flex items-center gap-1.5"
-                      >
-                        <LogIn className="w-3.5 h-3.5" />
-                        <span>Sign In</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAuthMode('register')
-                          setShowAuthModal(true)
-                        }}
-                        className="px-3.5 py-1.5 bg-[#202c33] hover:bg-[#2a3942] text-[#e9edef] font-semibold rounded-lg text-xs transition-all cursor-pointer flex items-center gap-1.5"
-                      >
-                        <UserPlus className="w-3.5 h-3.5 text-[#00a884]" />
-                        <span>Create Account</span>
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {submitted ? (
-                  <div className="p-6 bg-gradient-to-b from-[#00a884]/15 to-[#111b21] border border-[#00a884]/40 rounded-2xl space-y-4 text-center animate-fade-in">
-                    <div className="w-14 h-14 bg-[#00a884]/20 border border-[#00a884]/40 rounded-full flex items-center justify-center mx-auto text-[#00a884]">
-                      <CheckCircle2 className="w-8 h-8" />
-                    </div>
-                    <div className="space-y-1.5">
-                      <h3 className="font-extrabold text-base text-[#e9edef]">
-                        {existingInquiry?.status === 'accepted'
-                          ? 'Inquiry Accepted by Shop! 💬'
-                          : 'Inquiry Placed in Letterbox! 📬'}
-                      </h3>
-                      <p className="text-xs text-[#8696a0] max-w-md mx-auto leading-relaxed">
-                        {existingInquiry?.status === 'accepted'
-                          ? `The shop owner accepted your note! You can now chat in 2-way real-time without losing messages.`
-                          : `Your note has been securely delivered to ${profile?.displayName || 'the shop owner'}. Verified identity: @${authedUser?.handle || 'customer'}.`}
-                      </p>
-                    </div>
-
-                    {existingInquiry && (
-                      <div className="p-3.5 bg-[#0b141a] rounded-xl border border-[#202c33] max-w-sm mx-auto text-left space-y-2 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-purple-400">
-                            {existingInquiry.category || selectedCategory}
-                          </span>
-                          <span
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${
-                              existingInquiry.status === 'accepted'
-                                ? 'bg-[#00a884]/20 text-[#00a884]'
-                                : 'bg-amber-500/20 text-amber-400'
-                            }`}
-                          >
-                            {existingInquiry.status === 'accepted' ? 'Accepted' : 'Pending Review'}
-                          </span>
-                        </div>
-                        <p className="text-[#e9edef] text-[11px] italic bg-[#111b21] p-2 rounded border border-[#202c33]">
-                          "{existingInquiry.content || noteContent}"
-                        </p>
-                        <div className="text-[#8696a0] text-[10px] flex items-center gap-1.5">
-                          <Clock className="w-3 h-3 text-purple-400" />
-                          <span>Owner receives alerts instantly on mobile.</span>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-2">
-                      <button
-                        onClick={handleNavigateToLetterbox}
-                        className="w-full sm:w-auto px-5 py-2.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-extrabold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-[#00a884]/20 cursor-pointer transition-all"
-                      >
-                        <MessageSquare className="w-4 h-4" />
-                        <span>Go to My Letterbox</span>
-                      </button>
-
-                      <button
-                        onClick={() => {
-                          localStorage.removeItem(`chatze_inq_${shopHandle}`)
-                          setSubmitted(false)
-                          setExistingInquiry(null)
-                          setNoteContent('')
-                        }}
-                        className="text-xs font-semibold text-[#8696a0] hover:text-[#e9edef] cursor-pointer py-2 px-3"
-                      >
-                        Drop another note
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <form onSubmit={handleSubmit} className="space-y-4.5">
-                    {/* Inquiry Category Pills */}
-                    <div className="space-y-1.5">
-                      <label className="font-bold text-xs text-[#8696a0] block">
-                        What is your inquiry about?
-                      </label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {INQUIRY_CATEGORIES.map((cat) => (
-                          <button
-                            key={cat.id}
-                            type="button"
-                            onClick={() => setSelectedCategory(cat.label)}
-                            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                              selectedCategory === cat.label
-                                ? 'bg-[#00a884]/20 border-[#00a884] text-[#e9edef]'
-                                : 'bg-[#0b141a] border-[#202c33] text-[#8696a0] hover:border-[#2a3942] hover:text-[#e9edef]'
-                            }`}
-                          >
-                            <span className="font-bold text-xs block">{cat.label}</span>
-                            <span className="text-[10px] text-[#8696a0] block mt-0.5 truncate">{cat.hint}</span>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Sender Contact Optional Phone */}
-                    <div>
-                      <label className="font-semibold text-xs text-[#8696a0] block mb-1">
-                        Optional Contact Phone (For direct callback)
-                      </label>
-                      <input
-                        type="text"
-                        value={senderContact.startsWith('@') ? '' : senderContact}
-                        onChange={(e) => setSenderContact(e.target.value)}
-                        placeholder="e.g. 98XXXXXXXX"
-                        className="w-full px-3.5 py-2.5 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/50 focus:outline-none focus:border-[#00a884] transition-all"
-                      />
-                    </div>
-
-                    {/* Message Details */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="font-semibold text-xs text-[#8696a0]">
-                          Your Message / Question <span className="text-rose-400">*</span>
-                        </label>
-                        <span className="text-[10px] text-[#8696a0]">
-                          {noteContent.length}/500 chars
-                        </span>
-                      </div>
-                      <textarea
-                        rows={4}
-                        value={noteContent}
-                        onChange={(e) => setNoteContent(e.target.value)}
-                        placeholder={`e.g. Namaste! I am interested in size L jacket. Do you have it in stock, and do you deliver to Pokhara?`}
-                        required
-                        maxLength={500}
-                        className="w-full px-3.5 py-2.5 bg-[#0b141a] border border-[#202c33] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0]/50 focus:outline-none focus:border-[#00a884] resize-none leading-relaxed transition-all"
-                      />
-                    </div>
-
-                    {errorMessage && (
-                      <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs flex items-center gap-2">
-                        <AlertCircle className="w-4 h-4 shrink-0" />
-                        <span>{errorMessage}</span>
-                      </div>
-                    )}
-
-                    {/* Submit Button */}
-                    {authedUser ? (
-                      <button
-                        type="submit"
-                        disabled={submitting || !noteContent.trim()}
-                        className="w-full py-3 px-4 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all shadow-lg shadow-[#00a884]/20 cursor-pointer disabled:opacity-50"
-                      >
-                        {submitting ? (
-                          <>
-                            <div className="w-4 h-4 border-2 border-[#111b21] border-t-transparent rounded-full animate-spin"></div>
-                            <span>Dropping Note in Letterbox...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Send className="w-4 h-4" />
-                            <span>Submit Customer Note (Drop in Box)</span>
-                          </>
-                        )}
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setAuthMode('signin')
-                          setShowAuthModal(true)
-                        }}
-                        className="w-full py-3 px-4 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition-all cursor-pointer"
-                      >
-                        <LogIn className="w-4 h-4" />
-                        <span>Sign In / Create Account to Drop Note</span>
-                      </button>
-                    )}
-                  </form>
-                )}
-
-                {/* Anti-Spam Security Guarantee Footer */}
-                <div className="pt-3 border-t border-[#202c33]/70 flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-[#8696a0] gap-2">
-                  <span className="flex items-center gap-1.5">
-                    <Lock className="w-3.5 h-3.5 text-[#00a884]" />
-                    <span>Protected by Cloudflare Edge & Anti-Spam Shield</span>
-                  </span>
-                  <span className="text-[#8696a0]/80">
-                    1-Card Limit: Zero Invocations & Zero Spam
-                  </span>
+                  ))}
                 </div>
               </div>
-            </div>
+
+              {/* Inquiry Note Content */}
+              <div>
+                <label className="block text-xs font-semibold text-[#aebac1] mb-1 flex items-center justify-between">
+                  <span>Your Note to {profile?.displayName || 'Merchant'} *</span>
+                  <span className="text-[10px] text-[#8696a0]">{noteContent.length}/500 chars</span>
+                </label>
+                <textarea
+                  rows={4}
+                  required
+                  maxLength={500}
+                  value={noteContent}
+                  onChange={(e) => setNoteContent(e.target.value)}
+                  placeholder="Ask about pricing, current stock, color options, or delivery timelines to your city..."
+                  className="w-full bg-[#182229] border border-[#2a3942] focus:border-[#00a884] rounded-xl p-3 text-xs text-white placeholder-[#8696a0] focus:outline-none leading-relaxed resize-none"
+                />
+              </div>
+
+              {/* Optional Contact Phone */}
+              <div>
+                <label className="block text-xs font-semibold text-[#aebac1] mb-1 flex items-center gap-1.5">
+                  <Phone className="w-3.5 h-3.5 text-[#00a884]" />
+                  <span>Contact Phone / WhatsApp (Optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={senderContact.startsWith('@') ? '' : senderContact}
+                  onChange={(e) => setSenderContact(e.target.value)}
+                  placeholder="e.g. 9801234567 (for courier coordination)"
+                  className="w-full bg-[#182229] border border-[#2a3942] focus:border-[#00a884] rounded-xl px-3 py-2 text-xs text-white placeholder-[#8696a0] focus:outline-none"
+                />
+              </div>
+
+              {/* Submit CTA */}
+              <button
+                type="submit"
+                disabled={submitting || !noteContent.trim()}
+                className="w-full py-3 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <Send className="w-4 h-4" />
+                <span>{submitting ? 'Placing Note in Letterbox...' : 'Drop 1-Card Inquiry Note'}</span>
+              </button>
+
+              <p className="text-[11px] text-[#8696a0] text-center">
+                🛡️ Direct Cloudflare D1 Delivery • Zero Middleman Message Storage • Anti-Bot Shielded
+              </p>
+            </form>
           </div>
         )}
       </main>
 
-      {/* Quick In-Page Authentication Modal */}
-      {showAuthModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-[#111b21] border border-[#202c33] rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4 animate-scale-in">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-[#00a884]/20 text-[#00a884]">
-                  <MessageSquare className="w-4 h-4" />
-                </div>
-                <h3 className="font-bold text-sm text-[#e9edef]">
-                  {authMode === 'signin' ? 'Sign In to Chatze' : 'Create Chatze Account'}
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowAuthModal(false)}
-                className="p-1 text-[#8696a0] hover:text-[#e9edef] rounded-lg transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-[11px] text-[#8696a0] leading-relaxed">
-              Your Chatze account links your inquiries so the merchant’s reply safely lands in your Letterbox.
-            </p>
-
-            {/* Mode switch */}
-            <div className="flex bg-[#0b141a] p-1 rounded-xl border border-[#202c33] text-xs">
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode('signin')
-                  setAuthError('')
-                }}
-                className={`flex-1 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                  authMode === 'signin' ? 'bg-[#202c33] text-[#00a884]' : 'text-[#8696a0]'
-                }`}
-              >
-                Sign In
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setAuthMode('register')
-                  setAuthError('')
-                }}
-                className={`flex-1 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
-                  authMode === 'register' ? 'bg-[#202c33] text-[#00a884]' : 'text-[#8696a0]'
-                }`}
-              >
-                Create Account
-              </button>
-            </div>
-
-            {authError && (
-              <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs">
-                {authError}
-              </div>
-            )}
-
-            <form onSubmit={handleQuickAuth} className="space-y-3">
-              {authMode === 'register' && (
-                <div className="space-y-1">
-                  <label className="text-[11px] font-medium text-[#8696a0]">Your Full Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={authDisplayName}
-                    onChange={(e) => setAuthDisplayName(e.target.value)}
-                    placeholder="e.g. Suraj Singh"
-                    className="w-full px-3 py-2 bg-[#202c33] border border-[#222e35] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0] focus:outline-none focus:border-[#00a884]"
-                  />
-                </div>
-              )}
-
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium text-[#8696a0]">Username / Handle</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2 text-[#8696a0] text-xs font-mono">@</span>
-                  <input
-                    type="text"
-                    required
-                    value={authUsername}
-                    onChange={(e) => setAuthUsername(e.target.value)}
-                    placeholder={authMode === 'register' ? 'suraj_singh' : 'your_handle'}
-                    className="w-full pl-7 pr-3 py-2 bg-[#202c33] border border-[#222e35] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0] focus:outline-none focus:border-[#00a884]"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-[11px] font-medium text-[#8696a0]">Password</label>
-                <input
-                  type="password"
-                  required
-                  value={authPassword}
-                  onChange={(e) => setAuthPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full px-3 py-2 bg-[#202c33] border border-[#222e35] rounded-xl text-xs text-[#e9edef] placeholder-[#8696a0] focus:outline-none focus:border-[#00a884]"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={authLoading || !authUsername.trim() || !authPassword}
-                className="w-full py-2.5 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-xl text-xs transition-all shadow-md cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
-              >
-                {authLoading ? 'Verifying...' : authMode === 'signin' ? 'Sign In' : 'Create Account & Continue'}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Footer */}
-      <footer className="p-4 border-t border-[#202c33] bg-[#111b21]/40 text-center text-xs text-[#8696a0]">
-        Powered by <strong className="text-[#e9edef]">Chatze</strong> • Nepal's First Edge Chat Architecture 🇳🇵
+      {/* Clean Bottom Footer */}
+      <footer className="p-3 border-t border-[#202c33] bg-[#111b21]/60 text-center text-[11px] text-[#8696a0]">
+        Powered by <strong className="text-white">Chatze Sovereign Letterbox</strong> • Cloudflare Edge Architecture 🇳🇵
       </footer>
     </div>
   )

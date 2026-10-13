@@ -36,6 +36,8 @@ profileRoutes.get('/api/profile', async (c) => {
     privacyMode: (memoryStore.config.get('privacy_mode') as 'open' | 'pin_only' | 'closed') || 'pin_only',
     friendPin: memoryStore.config.get('friend_pin') || '',
     inquiryLetterboxEnabled: memoryStore.config.get('inquiry_letterbox_enabled') !== 'false',
+    hubListed: memoryStore.config.get('hub_listed') !== 'false',
+    hubNodeId: memoryStore.config.get('hub_node_id') || 'node_' + (user?.handle || 'admin'),
     instanceUrl: c.req.url.replace(/\/api\/.*$/, ''),
   }
 
@@ -43,7 +45,7 @@ profileRoutes.get('/api/profile', async (c) => {
     try {
       await ensureD1Database(db)
       const { results } = await db.prepare(
-        "SELECT key, value FROM system_config WHERE key IN ('display_name', 'account_type', 'bio', 'business_category', 'business_phone', 'business_location', 'business_hours', 'delivery_info', 'catalog_tags', 'privacy_mode', 'friend_pin', 'inquiry_letterbox_enabled')"
+        "SELECT key, value FROM system_config WHERE key IN ('display_name', 'account_type', 'bio', 'business_category', 'business_phone', 'business_location', 'business_hours', 'delivery_info', 'catalog_tags', 'privacy_mode', 'friend_pin', 'inquiry_letterbox_enabled', 'hub_listed', 'hub_node_id')"
       ).all()
 
       if (Array.isArray(results)) {
@@ -60,6 +62,8 @@ profileRoutes.get('/api/profile', async (c) => {
           if (row.key === 'privacy_mode') profile.privacyMode = row.value
           if (row.key === 'friend_pin') profile.friendPin = row.value
           if (row.key === 'inquiry_letterbox_enabled') profile.inquiryLetterboxEnabled = row.value === 'true'
+          if (row.key === 'hub_listed') profile.hubListed = row.value === 'true'
+          if (row.key === 'hub_node_id') profile.hubNodeId = row.value
         }
       }
 
@@ -109,6 +113,7 @@ profileRoutes.post('/api/profile', async (c) => {
       privacyMode,
       friendPin,
       inquiryLetterboxEnabled,
+      hubListed,
     } = body
 
     const cleanName = (displayName || '').trim() || 'Chatze User'
@@ -129,6 +134,7 @@ profileRoutes.post('/api/profile', async (c) => {
 
     const cleanPin = (friendPin || '').trim() || generatePin()
     const cleanLetterbox = inquiryLetterboxEnabled !== false ? 'true' : 'false'
+    const cleanHubListed = hubListed !== false ? 'true' : 'false'
 
     // Update memory store
     memoryStore.config.set('display_name', cleanName)
@@ -143,6 +149,7 @@ profileRoutes.post('/api/profile', async (c) => {
     memoryStore.config.set('privacy_mode', cleanPrivacy)
     memoryStore.config.set('friend_pin', cleanPin)
     memoryStore.config.set('inquiry_letterbox_enabled', cleanLetterbox)
+    memoryStore.config.set('hub_listed', cleanHubListed)
 
     const admin = memoryStore.users.get('usr_admin')
     if (admin) {
@@ -166,6 +173,7 @@ profileRoutes.post('/api/profile', async (c) => {
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('privacy_mode', ?)").bind(cleanPrivacy),
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('friend_pin', ?)").bind(cleanPin),
           db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('inquiry_letterbox_enabled', ?)").bind(cleanLetterbox),
+          db.prepare("INSERT OR REPLACE INTO system_config (key, value) VALUES ('hub_listed', ?)").bind(cleanHubListed),
           db.prepare("UPDATE users SET display_name = ? WHERE role = 'admin'").bind(cleanName),
         ])
       } catch (d1Err: any) {
@@ -188,6 +196,7 @@ profileRoutes.post('/api/profile', async (c) => {
         privacyMode: cleanPrivacy,
         friendPin: cleanPin,
         inquiryLetterboxEnabled: cleanLetterbox === 'true',
+        hubListed: cleanHubListed === 'true',
         instanceUrl: c.req.url.replace(/\/api\/.*$/, ''),
       },
     })

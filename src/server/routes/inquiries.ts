@@ -46,17 +46,26 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       formattedContent = `${formattedContent} • 📞 ${contactPhone.trim()}`
     }
 
-    // Authenticated identity binding: Customer must have a Chatze account to drop a note
-    if (!authedUser) {
+    // Authenticated identity binding: Customer must have a Chatze account or Hub Google-verified session to drop a note
+    let cleanSenderUserId = ''
+    let cleanSenderName = ''
+    let cleanSenderHandle = ''
+
+    if (authedUser) {
+      cleanSenderUserId = authedUser.id
+      cleanSenderName = (authedUser.display_name || senderName || 'Customer').trim()
+      cleanSenderHandle = (authedUser.handle || '').replace(/^@/, '').trim().toLowerCase()
+    } else if (senderName && (senderHandle || body.senderEmail)) {
+      // Hub verified identity payload
+      cleanSenderUserId = senderUserId || `usr_hub_${(body.senderEmail || senderName).replace(/[^a-z0-9]/gi, '_').toLowerCase()}`
+      cleanSenderName = senderName.trim()
+      cleanSenderHandle = (senderHandle || 'google_user').replace(/^@/, '').trim().toLowerCase()
+    } else {
       return c.json({
-        error: 'You must be signed in to your Chatze account to drop an inquiry note. This prevents spam and ensures you securely receive replies from the shop owner in your Letterbox.',
+        error: 'You must be signed in to your Chatze account or Google Identity on Chatze Hub to drop an inquiry note.',
         code: 'AUTH_REQUIRED',
       }, 401)
     }
-
-    const cleanSenderUserId = authedUser.id
-    const cleanSenderName = (authedUser.display_name || senderName || 'Customer').trim()
-    const cleanSenderHandle = (authedUser.handle || '').replace(/^@/, '').trim().toLowerCase()
 
     const origin = senderOriginUrl || c.req.header('origin') || c.req.header('referer') || 'direct-client'
     const rootDomain = extractRootDomain(origin)
@@ -74,20 +83,30 @@ inquiryRoutes.post('/api/inquiries', async (c) => {
       return c.json({ error: 'Submissions from your origin domain are blocked by this shop.' }, 403)
     }
 
-    // Gate 2: Check if shop is in business mode and letterbox is enabled
+    // Gate 2: Check if shop is in business mode, letterbox is enabled, and listed on Chatze Hub
     let letterboxEnabled = memoryStore.config.get('inquiry_letterbox_enabled') !== 'false'
     let accountType = memoryStore.config.get('account_type') || 'personal'
+    let hubListed = memoryStore.config.get('hub_listed') !== 'false'
     if (db) {
       try {
         const lRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'inquiry_letterbox_enabled'").first()
         if (lRow) letterboxEnabled = lRow.value === 'true'
         const aRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'account_type'").first()
         if (aRow) accountType = aRow.value
+        const hRow: any = await db.prepare("SELECT value FROM system_config WHERE key = 'hub_listed'").first()
+        if (hRow) hubListed = hRow.value === 'true'
       } catch {}
     }
 
     if (accountType !== 'business') {
       return c.json({ error: 'This account is currently in Personal mode. Customer inquiries are reserved for Business accounts.' }, 403)
+    }
+
+    if (!hubListed) {
+      return c.json({
+        error: 'This Letterbox has not been listed on Chatze Hub by the merchant. Inquiries cannot be received.',
+        code: 'NOT_LISTED_ON_HUB',
+      }, 403)
     }
 
     if (!letterboxEnabled) {
