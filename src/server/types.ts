@@ -78,6 +78,7 @@ export interface MemInquiry {
   category?: string
   content: string
   status: 'pending' | 'accepted' | 'dismissed'
+  conversation_id?: string
   created_at: number
 }
 

@@ -19,7 +19,7 @@ interface LetterboxEmbedModalProps {
   currentUser: HubUser | null
   authToken: string | null
   onClose: () => void
-  onOpenInNewTab: () => void
+  onOpenInNewTab: (url?: string) => void
   onOpenGoogleLogin?: () => void
 }
 
@@ -148,7 +148,7 @@ export function LetterboxEmbedModal({
 
           <div className="flex items-center gap-1 sm:gap-2">
             <button
-              onClick={onOpenInNewTab}
+              onClick={() => onOpenInNewTab(embedUrl)}
               className="p-2 text-[#8696a0] hover:text-white hover:bg-[#2a3942] rounded-lg transition-colors cursor-pointer"
               title="Open link in new tab"
             >

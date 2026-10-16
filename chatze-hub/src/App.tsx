@@ -163,8 +163,8 @@ export function App() {
           authToken={authToken}
           onClose={() => setActiveEmbedMerchant(null)}
           onOpenGoogleLogin={() => setShowGoogleModal(true)}
-          onOpenInNewTab={() => {
-            let url = (activeEmbedMerchant.letterbox_embed_url || '').trim()
+          onOpenInNewTab={(targetUrl) => {
+            let url = (targetUrl || activeEmbedMerchant.letterbox_embed_url || '').trim()
             if (!url.startsWith('http://') && !url.startsWith('https://')) {
               url = `https://${url}`
             }

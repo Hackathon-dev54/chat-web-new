@@ -228,8 +228,9 @@ inquiryRoutes.get('/api/inquiries', async (c) => {
 
   const queryHandle = c.req.query('handle')?.replace(/^@/, '').toLowerCase()
   const queryUserId = c.req.query('userId')
-  const effectiveHandle = authedUser?.handle || queryHandle || null
-  const effectiveUserId = authedUser?.id || queryUserId || null
+  const queryInquiryId = c.req.query('inquiryId')
+  const effectiveHandle = queryHandle || authedUser?.handle || null
+  const effectiveUserId = queryUserId || authedUser?.id || null
 
   let accountType = memoryStore.config.get('account_type') || 'personal'
   if (db) {
@@ -239,17 +240,21 @@ inquiryRoutes.get('/api/inquiries', async (c) => {
     } catch {}
   }
 
-  const isBusinessOwner = accountType === 'business' && (!authedUser || authedUser.role === 'admin')
+  // Business owner inbox view is strictly for authenticated admins without customer-specific queries
+  const isBusinessOwner = !queryInquiryId && !queryHandle && !queryUserId && accountType === 'business' && authedUser?.role === 'admin'
   let list: any[] = []
 
   if (db) {
     try {
-      if (isBusinessOwner) {
+      if (queryInquiryId) {
+        const row: any = await db.prepare('SELECT * FROM static_inquiries WHERE id = ? LIMIT 1').bind(queryInquiryId).first()
+        if (row) list = [row]
+      } else if (isBusinessOwner) {
         const { results } = await db.prepare('SELECT * FROM static_inquiries ORDER BY created_at DESC LIMIT 50').all()
         if (Array.isArray(results)) list = results
       } else if (effectiveHandle || effectiveUserId) {
         const { results } = await db.prepare(
-          'SELECT * FROM static_inquiries WHERE sender_handle = ? OR sender_user_id = ? ORDER BY created_at DESC LIMIT 50'
+          'SELECT * FROM static_inquiries WHERE sender_handle = ? OR (sender_user_id IS NOT NULL AND sender_user_id = ?) ORDER BY created_at DESC LIMIT 50'
         ).bind(effectiveHandle || '', effectiveUserId || '').all()
         if (Array.isArray(results)) list = results
       }
@@ -260,17 +265,37 @@ inquiryRoutes.get('/api/inquiries', async (c) => {
 
   if (list.length === 0) {
     const all = Array.from(memoryStore.inquiries.values()).sort((a, b) => b.created_at - a.created_at)
-    if (isBusinessOwner) {
+    if (queryInquiryId) {
+      const found = memoryStore.inquiries.get(queryInquiryId)
+      if (found) list = [found]
+    } else if (isBusinessOwner) {
       list = all
     } else if (effectiveHandle || effectiveUserId) {
       list = all.filter((i) => i.sender_handle === effectiveHandle || (effectiveUserId && i.sender_user_id === effectiveUserId))
     }
   }
 
-  const pendingCount = list.filter((i) => i.status === 'pending').length
+  // Ensure deterministic conversation_id is always attached to every returned inquiry
+  // If a conversation or messages exist for this customer, status is automatically 'accepted'
+  const mapped = list.map((inq: any) => {
+    const convId = inq.conversation_id || ('conv_' + inq.sender_handle)
+    const hasConv = memoryStore.conversations.has(convId)
+    const hasMsgs = memoryStore.messages.some((m) => m.conversation_id === convId)
+    let status = inq.status
+    if (status !== 'accepted' && (hasConv || hasMsgs)) {
+      status = 'accepted'
+    }
+    return {
+      ...inq,
+      conversation_id: convId,
+      status,
+    }
+  })
+
+  const pendingCount = mapped.filter((i: any) => i.status === 'pending').length
 
   return c.json({
-    inquiries: list,
+    inquiries: mapped,
     pendingCount,
     isBusinessOwner,
   })
@@ -301,6 +326,7 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
     // Mark inquiry accepted
     inquiry.status = 'accepted'
     const conversationId = 'conv_' + inquiry.sender_handle
+    inquiry.conversation_id = conversationId
     const messageId = 'msg_' + Math.random().toString(36).slice(2, 9)
     const convStatus = asFriend ? 'active' : 'letterbox'
 
@@ -375,7 +401,7 @@ inquiryRoutes.post('/api/inquiries/reply', async (c) => {
 
     if (db) {
       try {
-        await db.prepare("UPDATE static_inquiries SET status = 'accepted' WHERE id = ?").bind(inquiryId).run()
+        await db.prepare("UPDATE static_inquiries SET status = 'accepted', conversation_id = ? WHERE id = ?").bind(conversationId, inquiryId).run()
         await db.prepare('INSERT OR REPLACE INTO conversations (id, user_a, user_b, remote_handle, remote_instance_url, last_message_snippet, last_message_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
           .bind(convRecord.id, convRecord.user_a, convRecord.user_b, convRecord.remote_handle, convRecord.remote_instance_url, convRecord.last_message_snippet, now, convStatus).run()
         await db.prepare('INSERT OR REPLACE INTO messages (id, conversation_id, sender_id, content, created_at, read_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -477,9 +503,14 @@ inquiryRoutes.post('/api/inquiries/add-friend', async (c) => {
     }
     memoryStore.messages.push(msgRecord)
 
+    if (inquiry) {
+      inquiry.status = 'accepted'
+      inquiry.conversation_id = conversationId
+    }
+
     if (db) {
       try {
-        await db.prepare("UPDATE static_inquiries SET status = 'accepted' WHERE id = ?").bind(inquiryId).run()
+        await db.prepare("UPDATE static_inquiries SET status = 'accepted', conversation_id = ? WHERE id = ?").bind(conversationId, inquiryId).run()
         await db.prepare('INSERT OR REPLACE INTO federation_friendships (id, local_user_id, remote_handle, remote_instance_url, status, direction, created_at) VALUES (?, ?, ?, ?, "active", "outgoing", ?)')
           .bind(friendshipId, 'usr_admin', inquiry.sender_handle, inquiry.sender_origin_url, now).run()
         await db.prepare('INSERT OR REPLACE INTO conversations (id, user_a, user_b, remote_handle, remote_instance_url, last_message_snippet, last_message_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, "active")')
@@ -492,7 +523,7 @@ inquiryRoutes.post('/api/inquiries/add-friend', async (c) => {
     }
 
     await broadcastAllStreams('conversation_updated', convRecord, c.env)
-    await broadcastAllStreams('inquiry_status_updated', { inquiryId, status: 'accepted' }, c.env)
+    await broadcastAllStreams('inquiry_status_updated', { inquiryId, status: 'accepted', conversationId }, c.env)
 
     return c.json({
       success: true,

@@ -130,6 +130,26 @@ messagingRoutes.post('/api/messaging', async (c) => {
     emitUserEvent(actualSender, 'new_message', messageRecord)
     await broadcastAllStreams('new_message', messageRecord, c.env)
 
+    // Ensure inquiry is marked accepted if this was a merchant message to a customer
+    if (cleanRemoteHandle) {
+      for (const [, inq] of memoryStore.inquiries) {
+        if (inq.sender_handle === cleanRemoteHandle && inq.status !== 'accepted') {
+          inq.status = 'accepted'
+          inq.conversation_id = messageRecord.conversationId
+        }
+      }
+      if (db) {
+        try {
+          await db.prepare("UPDATE static_inquiries SET status = 'accepted', conversation_id = ? WHERE sender_handle = ?").bind(messageRecord.conversationId, cleanRemoteHandle).run()
+        } catch {}
+      }
+      await broadcastAllStreams('inquiry_status_updated', {
+        status: 'accepted',
+        conversationId: messageRecord.conversationId,
+        customerHandle: cleanRemoteHandle,
+      }, c.env)
+    }
+
     // Web Push background dispatch (asynchronous, 0ms latency to SSE)
     const recipientToNotify = cleanRemoteHandle || (conv?.user_a === actualSender ? conv?.user_b : conv?.user_a) || null
     const pushNotification = {
