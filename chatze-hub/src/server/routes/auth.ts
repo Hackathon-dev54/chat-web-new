@@ -19,16 +19,44 @@ authRoutes.post('/api/hub/auth/google', async (c) => {
     const body = await c.req.json()
     const { google_sub, email, display_name, avatar_url, credential } = body
 
-    if (!email || !display_name) {
+    let resolvedSub = google_sub
+    let resolvedEmail = email ? email.trim().toLowerCase() : ''
+    let resolvedName = display_name ? display_name.trim() : ''
+    let resolvedAvatar = avatar_url || ''
+
+    // If an authentic Google ID token (credential) is passed from Google Identity Services
+    if (credential && typeof credential === 'string') {
+      try {
+        const verifyRes = await fetch(
+          `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`
+        )
+        if (verifyRes.ok) {
+          const gInfo: any = await verifyRes.json()
+          // If server configured GOOGLE_CLIENT_ID, verify audience
+          if (c.env?.GOOGLE_CLIENT_ID && gInfo.aud !== c.env.GOOGLE_CLIENT_ID) {
+            return c.json({ error: 'Google Client ID verification failed (audience mismatch)' }, 401)
+          }
+          resolvedSub = gInfo.sub || resolvedSub
+          resolvedEmail = (gInfo.email || resolvedEmail).toLowerCase()
+          resolvedName = gInfo.name || resolvedName || resolvedEmail.split('@')[0]
+          resolvedAvatar = gInfo.picture || resolvedAvatar
+        } else {
+          console.warn('[Google TokenInfo Verify Warning] TokenInfo returned status', verifyRes.status)
+        }
+      } catch (verifyErr) {
+        console.warn('[Google TokenInfo Network/Verify Warning]', verifyErr)
+      }
+    }
+
+    if (!resolvedEmail || !resolvedName) {
       return c.json({ error: 'Missing required Google user identity information' }, 400)
     }
 
-    // In production with real Google Client ID, we can verify the id_token signature.
-    // For universal preview/testing, derive sub if not provided.
-    const cleanSub = google_sub || `g_${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}`
-    const cleanEmail = email.trim().toLowerCase()
-    const cleanName = display_name.trim()
-    const cleanAvatar = avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}`
+    const cleanSub = resolvedSub || `g_${resolvedEmail.replace(/[^a-z0-9]/g, '_')}`
+    const cleanEmail = resolvedEmail
+    const cleanName = resolvedName
+    const cleanAvatar =
+      resolvedAvatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(cleanName)}`
 
     const userShard = getUserDbShard(cleanSub, c.env)
     const now = Date.now()

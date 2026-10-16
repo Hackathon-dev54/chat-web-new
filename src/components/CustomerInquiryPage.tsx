@@ -26,6 +26,7 @@ import {
   Compass,
   ShieldAlert,
 } from 'lucide-react'
+import { CHATZE_HUB_URL } from '../lib/hubConfig'
 
 interface ShopProfile {
   displayName: string
@@ -86,8 +87,8 @@ export function CustomerInquiryPage({
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null
   const isChatzeHubEmbed = urlParams?.get('embed') === 'chatze_hub'
 
-  // The official Hub target URL for redirection
-  const hubRedirectUrl = `/hub?shop=${encodeURIComponent(shopHandle)}&target=letterbox`
+  // The official deployed Chatze Hub gateway target URL for redirection
+  const hubRedirectUrl = `${CHATZE_HUB_URL}/?shop=${encodeURIComponent(shopHandle)}&target=letterbox`
 
   // 1. Direct browser visit redirection countdown
   useEffect(() => {
@@ -194,7 +195,7 @@ export function CustomerInquiryPage({
 
   const handleCopyLink = () => {
     if (typeof window !== 'undefined') {
-      const url = `${window.location.origin}/hub?shop=${encodeURIComponent(shopHandle)}`
+      const url = `${CHATZE_HUB_URL}/?shop=${encodeURIComponent(shopHandle)}`
       navigator.clipboard.writeText(url)
       setCopiedShare(true)
       setTimeout(() => setCopiedShare(false), 2500)
@@ -389,7 +390,7 @@ export function CustomerInquiryPage({
           </div>
 
           <a
-            href="/hub"
+            href={CHATZE_HUB_URL}
             target="_top"
             className="w-full py-3 bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer"
           >

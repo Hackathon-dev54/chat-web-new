@@ -1,4 +1,5 @@
 export interface HubBindings {
+  DB?: any // Unified Cloudflare D1 Database (Zero-configuration mode)
   DB_HUB_META?: any
   DB_DIRECTORY?: any
   DB_USERS_0?: any

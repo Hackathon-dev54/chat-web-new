@@ -4,29 +4,33 @@ import {
   Filter,
   MapPin,
   Store,
-  Sparkles,
   ShieldCheck,
-  Building,
   RefreshCw,
+  PlusCircle,
+  LogIn,
 } from 'lucide-react'
 import type { HubMerchant, HubUser } from '../server/types'
 import { StoreCard } from './StoreCard'
 
 interface DiscoveryDirectoryProps {
   currentUser: HubUser | null
+  refreshTrigger?: number
   onInquire: (merchant: HubMerchant) => void
   onOpenInMyChatze: (merchant: HubMerchant) => void
   onOpenRegisterStore: () => void
+  onOpenGoogleLogin?: () => void
 }
 
-const CITIES = ['All', 'Kathmandu', 'Pokhara', 'Lalitpur', 'Bhaktapur', 'Biratnagar']
-const CATEGORIES = ['All', 'Handicrafts', 'Clothing & Gear', 'Food & Groceries', 'Electronics']
+const CITIES = ['All', 'Kathmandu', 'Pokhara', 'Lalitpur', 'Bhaktapur', 'Biratnagar', 'Dharan', 'Butwal']
+const CATEGORIES = ['All', 'Handicrafts', 'Clothing & Gear', 'Food & Groceries', 'Electronics', 'Jewelry & Gems']
 
 export function DiscoveryDirectory({
   currentUser,
+  refreshTrigger,
   onInquire,
   onOpenInMyChatze,
   onOpenRegisterStore,
+  onOpenGoogleLogin,
 }: DiscoveryDirectoryProps) {
   const [merchants, setMerchants] = useState<HubMerchant[]>([])
   const [loading, setLoading] = useState(true)
@@ -56,11 +60,19 @@ export function DiscoveryDirectory({
 
   useEffect(() => {
     fetchMerchants()
-  }, [selectedCity, selectedCategory])
+  }, [selectedCity, selectedCategory, refreshTrigger])
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     fetchMerchants()
+  }
+
+  const isFiltering = search.trim() !== '' || selectedCity !== 'All' || selectedCategory !== 'All'
+
+  const handleResetFilters = () => {
+    setSearch('')
+    setSelectedCity('All')
+    setSelectedCategory('All')
   }
 
   return (
@@ -95,7 +107,7 @@ export function DiscoveryDirectory({
           </div>
           <button
             type="submit"
-            className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-semibold text-xs px-6 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+            className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-semibold text-xs px-6 py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md"
           >
             <Search className="w-4 h-4" />
             <span>Search</span>
@@ -149,27 +161,63 @@ export function DiscoveryDirectory({
       {loading ? (
         <div className="py-20 flex flex-col items-center justify-center gap-3 text-[#8696a0]">
           <div className="w-8 h-8 border-2 border-[#00a884] border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs">Connecting to Cloudflare D1 Directory...</p>
+          <p className="text-xs">Connecting to Chatze Hub Edge...</p>
         </div>
       ) : merchants.length === 0 ? (
-        <div className="bg-[#111b21] border border-[#222e35] rounded-2xl p-12 text-center max-w-md mx-auto">
-          <Store className="w-12 h-12 text-[#8696a0] mx-auto mb-3 opacity-50" />
-          <h3 className="text-white font-semibold text-base mb-1">No Stores Found</h3>
-          <p className="text-[#8696a0] text-xs leading-relaxed mb-4">
-            No sovereign stores match your search criteria. Try selecting "All" or be the first to list a store in this category!
-          </p>
-          <button
-            onClick={onOpenRegisterStore}
-            className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-semibold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
-          >
-            List Your Store
-          </button>
+        <div className="bg-[#111b21] border border-[#222e35] rounded-2xl p-10 text-center max-w-lg mx-auto shadow-xl">
+          <div className="w-14 h-14 rounded-2xl bg-[#182229] border border-[#2a3942] flex items-center justify-center mx-auto mb-4 text-[#8696a0]">
+            <Store className="w-7 h-7" />
+          </div>
+
+          {isFiltering ? (
+            <>
+              <h3 className="text-white font-bold text-base mb-1.5">No Matching Stores</h3>
+              <p className="text-[#8696a0] text-xs leading-relaxed mb-5">
+                No stores found matching your search or filters. Try clearing your filters to see all listed stores.
+              </p>
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="bg-[#202c33] hover:bg-[#2a3942] text-white font-semibold text-xs px-4 py-2 rounded-xl transition-colors cursor-pointer"
+              >
+                Clear Filters
+              </button>
+            </>
+          ) : (
+            <>
+              <h3 className="text-white font-bold text-base mb-1.5">No Stores Registered Yet</h3>
+              <p className="text-[#8696a0] text-xs leading-relaxed mb-6">
+                The Chatze Hub Sovereign Directory is clean and ready. Have you self-deployed your Chatze store?
+                Sign in with Google and register your store URL to appear in the directory automatically!
+              </p>
+
+              {currentUser ? (
+                <button
+                  type="button"
+                  onClick={onOpenRegisterStore}
+                  className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold text-xs px-5 py-2.5 rounded-xl transition-all inline-flex items-center gap-2 cursor-pointer shadow-md"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>List Your Self-Deployed Store</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onOpenGoogleLogin}
+                  className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold text-xs px-5 py-2.5 rounded-xl transition-all inline-flex items-center gap-2 cursor-pointer shadow-md"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>Sign In with Google to List Store</span>
+                </button>
+              )}
+            </>
+          )}
         </div>
       ) : (
         <div>
           <div className="flex items-center justify-between mb-4">
             <p className="text-xs text-[#8696a0]">
-              Showing <strong className="text-white">{merchants.length}</strong> verified sovereign stores
+              Showing <strong className="text-white">{merchants.length}</strong> verified sovereign store{merchants.length === 1 ? '' : 's'}
             </p>
             <button
               onClick={fetchMerchants}

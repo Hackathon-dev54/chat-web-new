@@ -63,14 +63,16 @@ export function Navbar({
             <span className="hidden sm:inline">Download Hub Zip</span>
           </a>
 
-          {/* List Your Store Button */}
-          <button
-            onClick={onOpenRegisterStore}
-            className="hidden md:flex items-center gap-1.5 text-xs text-[#00a884] hover:text-[#25d366] bg-[#182229] hover:bg-[#202c33] border border-[#00a884]/30 px-3 py-1.5 rounded-xl transition-colors font-medium cursor-pointer"
-          >
-            <PlusCircle className="w-3.5 h-3.5" />
-            <span>List Self-Deployed Store</span>
-          </button>
+          {/* List Your Store Button (Only accessible after Google Sign-In) */}
+          {currentUser && (
+            <button
+              onClick={onOpenRegisterStore}
+              className="hidden md:flex items-center gap-1.5 text-xs text-[#00a884] hover:text-[#25d366] bg-[#182229] hover:bg-[#202c33] border border-[#00a884]/30 px-3 py-1.5 rounded-xl transition-colors font-medium cursor-pointer"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              <span>List Self-Deployed Store</span>
+            </button>
+          )}
 
           {currentUser ? (
             <div className="flex items-center gap-2">

@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Production build outputs
+dist/
+.wrangler/
+
+# Environment files
+.env
+.dev.vars
+*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store

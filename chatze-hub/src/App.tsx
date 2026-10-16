@@ -15,6 +15,7 @@ export function App() {
   const [showGoogleModal, setShowGoogleModal] = useState(false)
   const [showRegisterModal, setShowRegisterModal] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   // Initialize session from localStorage
   useEffect(() => {
@@ -30,10 +31,12 @@ export function App() {
             setCurrentUser(data.user)
           } else {
             localStorage.removeItem('chatze_hub_token')
+            setAuthToken(null)
           }
         })
         .catch(() => {
           localStorage.removeItem('chatze_hub_token')
+          setAuthToken(null)
         })
     }
   }, [])
@@ -57,19 +60,20 @@ export function App() {
       return
     }
 
-    // Track click on Hub
+    // Track inquiry click on Hub
     fetch(`/api/hub/directory/${merchant.handle}/track-click`, { method: 'POST' }).catch(() => {})
     setActiveEmbedMerchant(merchant)
   }
 
   const handleOpenInMyChatze = (merchant: HubMerchant) => {
     if (!currentUser?.sovereign_node_url) return
-    const targetStoreUrl = merchant.letterbox_embed_url.startsWith('http')
-      ? merchant.letterbox_embed_url
-      : `${window.location.origin}${merchant.letterbox_embed_url}`
+    let targetStoreUrl = (merchant.letterbox_embed_url || '').trim()
+    if (!targetStoreUrl.startsWith('http://') && !targetStoreUrl.startsWith('https://')) {
+      targetStoreUrl = `https://${targetStoreUrl}`
+    }
     
     // Deep-link directly into user's own sovereign Chatze instance
-    const deepLink = `${currentUser.sovereign_node_url}/inquire?store=${encodeURIComponent(targetStoreUrl)}`
+    const deepLink = `${currentUser.sovereign_node_url.replace(/\/+$/, '')}/inquire?store=${encodeURIComponent(targetStoreUrl)}`
     window.open(deepLink, '_blank')
   }
 
@@ -87,10 +91,19 @@ export function App() {
       {/* Main Discovery Directory */}
       <main className="flex-1">
         <DiscoveryDirectory
+          key={refreshTrigger}
+          refreshTrigger={refreshTrigger}
           currentUser={currentUser}
           onInquire={handleInquire}
           onOpenInMyChatze={handleOpenInMyChatze}
-          onOpenRegisterStore={() => setShowRegisterModal(true)}
+          onOpenRegisterStore={() => {
+            if (!currentUser) {
+              setShowGoogleModal(true)
+            } else {
+              setShowRegisterModal(true)
+            }
+          }}
+          onOpenGoogleLogin={() => setShowGoogleModal(true)}
         />
       </main>
 
@@ -101,7 +114,7 @@ export function App() {
             © {new Date().getFullYear()} <strong>Chatze Hub Gateway</strong> — Empowering Sovereign Commerce across Nepal
           </p>
           <div className="flex items-center gap-4 text-[11px]">
-            <span>Cloudflare D1 Sharding (10 DBs)</span>
+            <span>Cloudflare D1 Sovereign Database</span>
             <span>•</span>
             <span>Zero Message Storage</span>
             <span>•</span>
@@ -110,7 +123,7 @@ export function App() {
         </div>
       </footer>
 
-      {/* Modals */}
+      {/* Google Auth Modal */}
       {showGoogleModal && (
         <GoogleAuthModal
           onClose={() => setShowGoogleModal(false)}
@@ -118,25 +131,31 @@ export function App() {
         />
       )}
 
+      {/* Store Registration Modal */}
       {showRegisterModal && (
         <RegisterStoreModal
           authToken={authToken}
           onClose={() => setShowRegisterModal(false)}
           onStoreRegistered={(newStore) => {
-            // refresh or handle
+            setRefreshTrigger((prev) => prev + 1)
           }}
+          onOpenGoogleLogin={() => setShowGoogleModal(true)}
         />
       )}
 
+      {/* User / Merchant Profile Modal */}
       {showProfileModal && currentUser && (
         <UserProfileModal
           user={currentUser}
           authToken={authToken}
           onClose={() => setShowProfileModal(false)}
           onUpdateUser={(updated) => setCurrentUser(updated)}
+          onOpenStoreEmbed={(merchant) => setActiveEmbedMerchant(merchant)}
+          onStoreUpdated={() => setRefreshTrigger((prev) => prev + 1)}
         />
       )}
 
+      {/* Letterbox Live Embed Modal */}
       {activeEmbedMerchant && (
         <LetterboxEmbedModal
           merchant={activeEmbedMerchant}
@@ -145,9 +164,10 @@ export function App() {
           onClose={() => setActiveEmbedMerchant(null)}
           onOpenGoogleLogin={() => setShowGoogleModal(true)}
           onOpenInNewTab={() => {
-            const url = activeEmbedMerchant.letterbox_embed_url.startsWith('http')
-              ? activeEmbedMerchant.letterbox_embed_url
-              : `${window.location.origin}${activeEmbedMerchant.letterbox_embed_url}`
+            let url = (activeEmbedMerchant.letterbox_embed_url || '').trim()
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+              url = `https://${url}`
+            }
             window.open(url, '_blank')
           }}
         />

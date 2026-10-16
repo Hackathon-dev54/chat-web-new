@@ -31,6 +31,7 @@ import {
   UserCheck,
   ArrowRight,
 } from 'lucide-react'
+import { CHATZE_HUB_URL, getHubStoreUrl } from '../lib/hubConfig'
 import {
   getLocalMessages,
   saveLocalMessages,
@@ -1149,7 +1150,7 @@ export function MessagingApp({
                 <Settings className="w-4 h-4" />
               </button>
               <a
-                href="/hub"
+                href={CHATZE_HUB_URL}
                 target="_blank"
                 rel="noopener noreferrer"
                 title="Browse Chatze Hub Directory (Discover Sovereign Stores)"
@@ -1365,7 +1366,9 @@ export function MessagingApp({
                         <span className="font-bold text-xs text-[#e9edef]">My Customer Letterbox</span>
                       </div>
                       <a
-                        href="/hub"
+                        href={CHATZE_HUB_URL}
+                        target="_blank"
+                        rel="noreferrer"
                         className="text-[10px] bg-[#00a884]/20 text-[#00a884] hover:bg-[#00a884]/30 px-2 py-0.5 rounded font-bold border border-[#00a884]/30 flex items-center gap-1 cursor-pointer"
                       >
                         <span>+ Explore Hub</span>
@@ -1476,7 +1479,9 @@ export function MessagingApp({
                         You haven't dropped any notes to shops. Explore verified stores on Chatze Hub to inquire about products and services!
                       </p>
                       <a
-                        href="/hub"
+                        href={CHATZE_HUB_URL}
+                        target="_blank"
+                        rel="noreferrer"
                         className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#00a884] text-[#111b21] rounded-xl font-bold text-xs hover:bg-[#02906f] transition-all cursor-pointer shadow-md"
                       >
                         <span>Explore Stores on Chatze Hub</span>
@@ -1503,7 +1508,7 @@ export function MessagingApp({
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
                       <a
-                        href={`/hub?shop=${currentUser.handle}`}
+                        href={getHubStoreUrl(currentUser.handle)}
                         target="_blank"
                         rel="noreferrer"
                         className="px-2 py-1 bg-[#202c33] hover:bg-[#2a3942] text-[#00a884] rounded-lg text-[10px] font-semibold flex items-center gap-1 cursor-pointer"

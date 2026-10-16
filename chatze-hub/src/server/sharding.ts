@@ -26,6 +26,11 @@ export function getUserShardIndex(googleSub: string): number {
  * Retrieves the D1 database binding for a specific Google Sub ID.
  */
 export function getUserDbShard(googleSub: string, env: HubBindings): any {
+  // If running in unified single-database mode, route directly to DB
+  if (env.DB) {
+    return env.DB
+  }
+
   const index = getUserShardIndex(googleSub)
   const shards = [
     env.DB_USERS_0,
@@ -37,5 +42,5 @@ export function getUserDbShard(googleSub: string, env: HubBindings): any {
     env.DB_USERS_6,
     env.DB_USERS_7,
   ]
-  return shards[index] || env.DB_USERS_0
+  return shards[index] || env.DB_USERS_0 || env.DB
 }

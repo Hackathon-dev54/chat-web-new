@@ -3,7 +3,6 @@ import { SetupWizard } from './components/SetupWizard'
 import { AuthScreens } from './components/AuthScreens'
 import { MessagingApp } from './components/MessagingApp'
 import { CustomerInquiryPage } from './components/CustomerInquiryPage'
-import { App as HubApp } from '../chatze-hub/src/App'
 
 export function App() {
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null)
@@ -11,11 +10,6 @@ export function App() {
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [forceLogin, setForceLogin] = useState(false)
-
-  const isHubVisitor = typeof window !== 'undefined' && (
-    window.location.pathname.startsWith('/hub') ||
-    new URLSearchParams(window.location.search).has('hub')
-  )
 
   const isShopVisitor = !forceLogin && typeof window !== 'undefined' && (
     window.location.pathname.startsWith('/shop') ||
@@ -97,11 +91,6 @@ export function App() {
         <p className="text-xs font-medium tracking-wide">Connecting to Edge Cloud...</p>
       </div>
     )
-  }
-
-  // Public Hub View (The centralized directory + Google Sign-In)
-  if (isHubVisitor) {
-    return <HubApp />
   }
 
   // Public Customer View for Shop Links

@@ -295,3 +295,68 @@ To balance open-source freedom with user safety:
 * **Link Shield:** Any external URLs sent by a merchant require an explicit safety warning before opening.
 * **Administrative Delisting:** Reported or compromised nodes can be instantly banned and purged from the Hub's Shard 1 directory database.
 
+---
+
+## 11. Google OAuth 2.0 Passport Setup & Environment Variables
+
+### Environment Files
+The Chatze Hub repository contains explicit environment configuration templates:
+* **`chatze-hub/.env.example`**: Reference template for Vite frontend & Cloudflare secrets.
+* **`chatze-hub/.env`**: Active local configuration file.
+* **`chatze-hub/wrangler.toml`**: Cloudflare Workers bindings & server environment secrets.
+
+### Required Variables:
+| Variable Name | Environment | Description |
+|---|---|---|
+| `VITE_GOOGLE_CLIENT_ID` | Client (Vite Frontend) | Public Google OAuth 2.0 Web Client ID used by Google Identity Services (GIS) |
+| `GOOGLE_CLIENT_ID` | Server (Cloudflare Worker) | Google Client ID used by the Hub edge to verify the Google ID token audience |
+| `JWT_SECRET` | Server (Cloudflare Worker) | HMAC-SHA256 secret key used to sign Hub Identity Tokens passed to merchant Letterboxes |
+| `VITE_HUB_NAME` | Client (Optional) | Brand title for the Hub gateway |
+
+### Step-by-Step Google OAuth Setup:
+1. Open the [Google Cloud Console Credentials](https://console.cloud.google.com/apis/credentials).
+2. Click **Create Credentials** → **OAuth client ID**.
+3. Select Application type: **Web application**.
+4. Set Authorized JavaScript origins:
+   * Local development: `http://localhost:3001` (or `http://localhost:3000`)
+   * Production: `https://<your-hub-subdomain>.pages.dev` or custom domain.
+5. Copy the generated **Client ID** (format: `xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com`).
+6. Paste into `chatze-hub/.env`:
+   ```bash
+   VITE_GOOGLE_CLIENT_ID=xxxxxxxxxxxx-xxxxxxxxxxxxxxxx.apps.googleusercontent.com
+   ```
+7. For Cloudflare production deployment, set the secret:
+   ```bash
+   npx wrangler secret put JWT_SECRET
+   npx wrangler secret put GOOGLE_CLIENT_ID
+   ```
+
+### Fallback & Developer Demo Mode:
+If `VITE_GOOGLE_CLIENT_ID` is not yet configured, Chatze Hub automatically enables **Developer Demo Mode**:
+* Displays an informational guide on how to configure Google OAuth.
+* Allows entering a Google Client ID live in the browser for instant testing.
+* Provides 1-tap instant test accounts ("Bikash Shrestha", "Sujata Gurung") so local testing is never blocked.
+
+---
+
+## 12. Zero-Touch Cloudflare D1 Auto-Provisioning (No Manual wrangler.toml Editing)
+
+To completely eliminate manual copy-pasting of database credentials and IDs:
+
+### Dual Database Architectural Modes:
+1. **Unified Database Mode (`chatze-hub-db`, Recommended & Default):**
+   * Single Cloudflare D1 database containing `hub_config`, `ip_rate_limits`, `merchants`, and `users`.
+   * Bound via `binding = "DB"`.
+   * Zero maintenance overhead; optimal for typical production deployments.
+2. **10-Database Sharded Cluster Mode (`chatze-hub-meta`, `chatze-hub-directory`, `chatze-hub-users-0..7`):**
+   * Enterprise-scale sharded architecture.
+   * Fully automated via consistent hashing algorithm (FNV-1a).
+
+### Automated Setup & Deployment Commands:
+| Command | What it does |
+|---|---|
+| `npm run deploy:auto` | **1-Click Total Deployment:** Checks Cloudflare login, automatically creates D1 DB, updates `wrangler.toml`, runs migrations, seeds initial stores, builds frontend, and deploys to Cloudflare Workers. |
+| `npm run setup` | Automatically provisions D1 database, auto-populates `wrangler.toml`, generates secure 64-char `JWT_SECRET`, and runs migrations. |
+| `npm run setup:sharded` | Automatically provisions all 10 D1 databases, auto-fills all 10 IDs in `wrangler.toml`, and migrates all 10 shards. |
+
+

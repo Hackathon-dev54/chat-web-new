@@ -1,35 +1,61 @@
 import { Hono } from 'hono'
 import type { HubBindings, HubMerchant } from '../types'
-import { SEED_MERCHANTS } from '../mockData'
+import { ensureHubD1Database } from '../db'
 
 const directoryRoutes = new Hono<{ Bindings: HubBindings }>()
 
-// In-memory fallback if D1 is not connected yet during local dev
-let inMemoryMerchants: HubMerchant[] = [...SEED_MERCHANTS]
+// Real in-memory stores cache (starts strictly empty, no dummy seeds)
+let inMemoryMerchants: HubMerchant[] = []
+
+const DUMMY_HANDLES = new Set([
+  'kathmanducrafts',
+  'annapurnagear',
+  'himalayanpashmina',
+  'thamelcrafts',
+  'pokharagear',
+  'patanpashmina',
+  'himalayanspice',
+  'claycrafts',
+  'easterntech',
+])
+
+const DUMMY_IDS = new Set([
+  'm_kathmandu_crafts',
+  'm_himalayan_pashmina',
+  'm_pokhara_trekking',
+  'm_thamel_crafts',
+  'm_pokhara_trek',
+  'm_patan_pashmina',
+  'm_kathmandu_spices',
+  'm_bhaktapur_pottery',
+  'm_biratnagar_tech',
+])
 
 /**
  * GET /api/hub/directory
- * List and search sovereign stores across Nepal
+ * List and search real sovereign stores registered in the Hub
  * Query params: ?search=...&city=...&category=...&limit=...
  */
 directoryRoutes.get('/api/hub/directory', async (c) => {
-  const db = c.env?.DB_DIRECTORY
+  const db = c.env?.DB_DIRECTORY || c.env?.DB
   const query = c.req.query('search')?.trim().toLowerCase() || ''
   const city = c.req.query('city')?.trim() || ''
   const category = c.req.query('category')?.trim() || ''
 
   if (db) {
     try {
-      let sql = 'SELECT * FROM merchants WHERE verification_status != "flagged"'
+      await ensureHubD1Database(db)
+
+      let sql = "SELECT * FROM merchants WHERE (verification_status IS NULL OR verification_status != 'flagged')"
       const params: any[] = []
 
       if (city && city !== 'All') {
-        sql += ' AND city = ?'
+        sql += ' AND LOWER(city) = LOWER(?)'
         params.push(city)
       }
 
       if (category && category !== 'All') {
-        sql += ' AND category = ?'
+        sql += ' AND LOWER(category) = LOWER(?)'
         params.push(category)
       }
 
@@ -39,18 +65,32 @@ directoryRoutes.get('/api/hub/directory', async (c) => {
         params.push(pattern, pattern, pattern, pattern)
       }
 
-      sql += ' ORDER BY verification_status = "featured" DESC, view_count DESC LIMIT 50'
+      sql += ' ORDER BY created_at DESC LIMIT 50'
       const rows = await db.prepare(sql).bind(...params).all()
-      if (rows.results && rows.results.length > 0) {
-        return c.json({ merchants: rows.results, total: rows.results.length })
-      }
+      const rawList = (rows.results as unknown as HubMerchant[]) || []
+
+      // Filter out any dummy accounts in JavaScript
+      const cleanList = rawList.filter((m) => {
+        const h = (m.handle || '').toLowerCase().replace(/^@/, '')
+        const id = m.id || ''
+        const sub = m.owner_google_sub || ''
+        return !DUMMY_HANDLES.has(h) && !DUMMY_IDS.has(id) && !sub.startsWith('demo_')
+      })
+
+      return c.json({ merchants: cleanList, total: cleanList.length })
     } catch (err) {
-      console.warn('[Hub D1 Directory Query Error, using fallback]', err)
+      console.warn('[Hub D1 Directory Query Error, using memory]', err)
     }
   }
 
-  // Fallback to memory / seed merchants
-  let filtered = inMemoryMerchants.filter((m) => m.verification_status !== 'flagged')
+  // Fallback to memory cache
+  let filtered = inMemoryMerchants.filter((m) => {
+    const h = (m.handle || '').toLowerCase().replace(/^@/, '')
+    const id = m.id || ''
+    const sub = m.owner_google_sub || ''
+    return m.verification_status !== 'flagged' && !DUMMY_HANDLES.has(h) && !DUMMY_IDS.has(id) && !sub.startsWith('demo_')
+  })
+
   if (city && city !== 'All') {
     filtered = filtered.filter((m) => m.city.toLowerCase() === city.toLowerCase())
   }
@@ -76,7 +116,11 @@ directoryRoutes.get('/api/hub/directory', async (c) => {
  */
 directoryRoutes.get('/api/hub/directory/:handle', async (c) => {
   const handle = c.req.param('handle').replace(/^@/, '').toLowerCase()
-  const db = c.env?.DB_DIRECTORY
+  const db = c.env?.DB_DIRECTORY || c.env?.DB
+
+  if (DUMMY_HANDLES.has(handle)) {
+    return c.json({ error: 'Store not found in Chatze Hub directory' }, 404)
+  }
 
   if (db) {
     try {
@@ -106,7 +150,7 @@ directoryRoutes.get('/api/hub/directory/:handle', async (c) => {
  */
 directoryRoutes.post('/api/hub/directory/:handle/track-click', async (c) => {
   const handle = c.req.param('handle').replace(/^@/, '').toLowerCase()
-  const db = c.env?.DB_DIRECTORY
+  const db = c.env?.DB_DIRECTORY || c.env?.DB
   if (db) {
     db.prepare('UPDATE merchants SET inquiry_clicks = inquiry_clicks + 1 WHERE LOWER(handle) = ?').bind(handle).run().catch(() => {})
   }

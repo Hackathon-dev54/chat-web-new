@@ -66,33 +66,82 @@ chatze-hub/
 
 ---
 
-## 🚀 Independent Deployment
+## 🔑 Environment Variables & Google OAuth Configuration
 
-To deploy Chatze Hub to a separate Cloudflare account:
+Copy `.env.example` to `.env`:
+```bash
+cp .env.example .env
+```
+
+| Variable | Target | Purpose |
+|---|---|---|
+| `VITE_GOOGLE_CLIENT_ID` | Frontend (`.env`) | Google OAuth 2.0 Web Client ID rendered by Google Identity Services |
+| `GOOGLE_CLIENT_ID` | Cloudflare Worker (`wrangler.toml` / secret) | Edge-side verification of Google ID token claims |
+| `JWT_SECRET` | Cloudflare Worker (`wrangler.toml` / secret) | Signs the Hub Identity Token passed to merchant Letterboxes |
+
+### How to obtain Google Web Client ID:
+1. Visit [Google Cloud Console](https://console.cloud.google.com/apis/credentials).
+2. Create **OAuth Client ID** → **Web Application**.
+3. Under **Authorized JavaScript Origins**, add:
+   - `http://localhost:3001` (local development)
+   - `https://<your-hub-name>.pages.dev` (Cloudflare Pages/Worker origin)
+4. Add the Client ID to `chatze-hub/.env`:
+   ```bash
+   VITE_GOOGLE_CLIENT_ID="your-id.apps.googleusercontent.com"
+   ```
+
+*Note: If `VITE_GOOGLE_CLIENT_ID` is not yet configured, Chatze Hub gracefully activates **Developer Demo Mode** with 1-tap testing profiles so you are never blocked during testing!*
+
+---
+
+## 🚀 Automated Zero-Touch Deployment (No Manual Copy-Pasting!)
+
+You **do not need to copy-paste any database IDs into `wrangler.toml` manually**. The included setup automation script does everything for you in a single command.
+
+### Option A: 1-Click Zero-Config Deployment (Recommended)
+This creates the D1 database on your Cloudflare account, auto-populates `wrangler.toml`, applies all SQL migrations, seeds initial stores, and deploys to Cloudflare Workers:
 
 ```bash
 cd chatze-hub
 npm install
 
-# 1. Create the 10 D1 databases on Cloudflare:
-wrangler d1 create chatze-hub-meta
-wrangler d1 create chatze-hub-directory
-wrangler d1 create chatze-hub-users-0
-wrangler d1 create chatze-hub-users-1
-wrangler d1 create chatze-hub-users-2
-wrangler d1 create chatze-hub-users-3
-wrangler d1 create chatze-hub-users-4
-wrangler d1 create chatze-hub-users-5
-wrangler d1 create chatze-hub-users-6
-wrangler d1 create chatze-hub-users-7
+# 1. Log in to Cloudflare (one-time):
+npx wrangler login
 
-# 2. Run migrations across the shards:
-wrangler d1 execute chatze-hub-meta --file=./migrations/0000_meta_schema.sql
-wrangler d1 execute chatze-hub-directory --file=./migrations/0001_directory_schema.sql
-for i in {0..7}; do
-  wrangler d1 execute chatze-hub-users-$i --file=./migrations/0002_users_shards_schema.sql
-done
+# 2. Run the automated setup and deploy in 1 single command:
+npm run deploy:auto
+```
 
-# 3. Deploy worker & static assets to Cloudflare:
+That's it! Everything is automatically provisioned, migrated, and deployed.
+
+---
+
+### Option B: Step-by-Step Setup
+If you want to review the setup before deploying:
+
+```bash
+cd chatze-hub
+npm install
+
+# Auto-creates D1 database, seeds schema, and updates wrangler.toml:
+npm run setup
+
+# Build frontend and deploy to Cloudflare:
+npm run build
 npm run deploy
 ```
+
+---
+
+### Option C: 10-Database Sharded Cluster Mode
+If you prefer the enterprise-scale 10-database sharding architecture:
+
+```bash
+# Automatically creates all 10 D1 databases, updates wrangler.toml, and runs migrations:
+npm run setup:sharded
+
+# Deploy:
+npm run build
+npm run deploy
+```
+*Zero manual editing of `wrangler.toml` required in any mode!*

@@ -20,6 +20,7 @@ import {
   ExternalLink,
   Download,
 } from 'lucide-react'
+import { getHubStoreUrl } from '../lib/hubConfig'
 
 export interface ProfileData {
   displayName: string
@@ -816,7 +817,7 @@ export function ProfileSettingsModal({
                         <span>Sovereign Letterbox Embed URL</span>
                       </span>
                       <a
-                        href={`/hub?shop=${handle}`}
+                        href={getHubStoreUrl(handle)}
                         target="_blank"
                         rel="noreferrer"
                         className="text-[11px] text-[#00a884] hover:underline flex items-center gap-1 font-semibold"

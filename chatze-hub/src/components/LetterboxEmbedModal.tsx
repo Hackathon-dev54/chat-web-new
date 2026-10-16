@@ -48,15 +48,20 @@ export function LetterboxEmbedModal({
 
   // Construct target embed URL: passes verified Google identity parameters safely via query string
   const buildEmbedUrl = () => {
-    let rawUrl = merchant.letterbox_embed_url || `/shop?shop=${merchant.handle}`
-    
-    // Resolve relative vs absolute
-    const baseUrl = rawUrl.startsWith('http')
-      ? rawUrl
-      : `${window.location.origin}${rawUrl.startsWith('/') ? '' : '/'}${rawUrl}`
+    let rawUrl = (merchant.letterbox_embed_url || '').trim()
+    if (!rawUrl) return ''
+
+    // Ensure fully qualified https:// URL for the sovereign store node
+    if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+      rawUrl = 'https://' + rawUrl
+    }
 
     try {
-      const url = new URL(baseUrl)
+      const url = new URL(rawUrl)
+      // If just domain given, append /letterbox
+      if (url.pathname === '/' || url.pathname === '') {
+        url.pathname = '/letterbox'
+      }
       url.searchParams.set('embed', 'chatze_hub')
       
       if (currentUser) {
@@ -74,7 +79,7 @@ export function LetterboxEmbedModal({
       }
       return url.toString()
     } catch {
-      return baseUrl
+      return rawUrl
     }
   }
 
@@ -82,7 +87,11 @@ export function LetterboxEmbedModal({
 
   let nodeOrigin = 'Sovereign Edge Node'
   try {
-    const u = new URL(merchant.letterbox_embed_url.startsWith('http') ? merchant.letterbox_embed_url : `${window.location.origin}/${merchant.letterbox_embed_url}`)
+    let rawUrl = (merchant.letterbox_embed_url || '').trim()
+    if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+      rawUrl = 'https://' + rawUrl
+    }
+    const u = new URL(rawUrl)
     nodeOrigin = u.origin
   } catch {}
 

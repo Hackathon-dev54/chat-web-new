@@ -11,7 +11,6 @@ import pushRoutes from './routes/push'
 import streamRoutes from './routes/stream'
 import profileRoutes from './routes/profile'
 import inquiryRoutes from './routes/inquiries'
-import hubApp from '../../chatze-hub/src/server/index'
 
 import { ensureServerKeyPair, signPayload, getExportedPublicKeyBase64 } from './crypto'
 import { memoryStore } from './store'
@@ -127,7 +126,6 @@ app.route('/', pushRoutes)
 app.route('/', streamRoutes)
 app.route('/', profileRoutes)
 app.route('/', inquiryRoutes)
-app.route('/', hubApp)
 
 // Fallback to static assets in production on Cloudflare Workers
 app.all('*', async (c) => {

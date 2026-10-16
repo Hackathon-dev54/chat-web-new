@@ -5,11 +5,12 @@ import {
   PlusCircle,
   MapPin,
   Tag,
-  Phone,
   Link as LinkIcon,
   CheckCircle2,
   AlertCircle,
   Sparkles,
+  RefreshCw,
+  LogIn,
 } from 'lucide-react'
 import type { HubMerchant } from '../server/types'
 
@@ -17,6 +18,7 @@ interface RegisterStoreModalProps {
   authToken: string | null
   onClose: () => void
   onStoreRegistered: (newStore: HubMerchant) => void
+  onOpenGoogleLogin?: () => void
 }
 
 const CITIES = ['Kathmandu', 'Pokhara', 'Lalitpur', 'Bhaktapur', 'Biratnagar', 'Dharan', 'Butwal', 'Nepalgunj', 'Chitwan']
@@ -26,7 +28,9 @@ export function RegisterStoreModal({
   authToken,
   onClose,
   onStoreRegistered,
+  onOpenGoogleLogin,
 }: RegisterStoreModalProps) {
+  const [deployedUrl, setDeployedUrl] = useState('')
   const [handle, setHandle] = useState('')
   const [businessName, setBusinessName] = useState('')
   const [category, setCategory] = useState(CATEGORIES[0])
@@ -39,52 +43,73 @@ export function RegisterStoreModal({
   const [tags, setTags] = useState('')
 
   const [loading, setLoading] = useState(false)
-  const [probing, setProbing] = useState(false)
-  const [nodeVerified, setNodeVerified] = useState<boolean | null>(null)
-  const [nodeProtocol, setNodeProtocol] = useState('')
+  const [autoDetecting, setAutoDetecting] = useState(false)
+  const [autoDetected, setAutoDetected] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  const probeNode = async (urlToProbe: string) => {
-    if (!urlToProbe.trim()) return
-    setProbing(true)
-    setNodeVerified(null)
+  // Automatic Store Detection from Deployed URL
+  const handleAutoDetect = async () => {
+    const cleanUrl = deployedUrl.trim()
+    if (!cleanUrl) {
+      setError('Please enter your self-deployed Chatze store URL first')
+      return
+    }
+
+    setAutoDetecting(true)
     setError('')
+    setSuccess('')
+
     try {
-      const baseUrl = urlToProbe.startsWith('http')
-        ? new URL(urlToProbe).origin
-        : `${window.location.origin}`
-      
-      const res = await fetch(`${baseUrl}/.well-known/chatze-node.json`)
-      if (res.ok) {
-        const data = await res.json()
-        if (data.protocol === 'chatze-letterbox-v1') {
-          setNodeVerified(true)
-          setNodeProtocol(data.protocol)
-          if (!handle && data.handle) setHandle(data.handle)
-          if (!businessName && data.owner_name) setBusinessName(data.owner_name)
-        } else {
-          setNodeVerified(false)
-        }
-      } else {
-        setNodeVerified(false)
+      const res = await fetch(`/api/hub/merchants/detect?url=${encodeURIComponent(cleanUrl)}`)
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not detect store')
       }
-    } catch {
-      setNodeVerified(false)
+
+      const d = data.detected || {}
+      if (d.handle) setHandle(d.handle)
+      if (d.business_name) setBusinessName(d.business_name)
+      if (d.letterbox_embed_url) setEmbedUrl(d.letterbox_embed_url)
+      if (d.bio) setBio(d.bio)
+      if (d.logo_url) setLogoUrl(d.logo_url)
+
+      setAutoDetected(true)
+      setSuccess('Store automatically detected! Review details below and click List Store.')
+    } catch (err: any) {
+      setError(err.message || 'Auto-detect error. You can still fill in details manually.')
     } finally {
-      setProbing(false)
+      setAutoDetecting(false)
     }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (!authToken) {
+      setError('Please sign in with Google first so your store is securely linked to your account.')
+      return
+    }
+
     setLoading(true)
     setError('')
     setSuccess('')
 
     const cleanHandle = handle.replace(/^@/, '').trim().toLowerCase()
-    if (!cleanHandle || !businessName.trim() || !embedUrl.trim()) {
-      setError('Please fill in Store Handle, Business Name, and Letterbox Embed URL.')
+    let targetEmbed = embedUrl.trim()
+    if (!targetEmbed && deployedUrl.trim()) {
+      let base = deployedUrl.trim().replace(/\/+$/, '')
+      if (!base.startsWith('http://') && !base.startsWith('https://')) {
+        base = 'https://' + base
+      }
+      targetEmbed = `${base}/letterbox`
+    }
+    if (targetEmbed && !targetEmbed.startsWith('http://') && !targetEmbed.startsWith('https://')) {
+      targetEmbed = 'https://' + targetEmbed
+    }
+
+    if (!cleanHandle || !businessName.trim() || !targetEmbed) {
+      setError('Please fill in Store Handle, Business Name, and Store Embed URL.')
       setLoading(false)
       return
     }
@@ -94,7 +119,7 @@ export function RegisterStoreModal({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
           handle: cleanHandle,
@@ -103,7 +128,7 @@ export function RegisterStoreModal({
           city,
           address: address.trim(),
           bio: bio.trim(),
-          letterbox_embed_url: embedUrl.trim(),
+          letterbox_embed_url: targetEmbed,
           logo_url: logoUrl.trim(),
           phone_whatsapp_optional: phone.trim(),
           tags: tags.trim(),
@@ -115,10 +140,10 @@ export function RegisterStoreModal({
         throw new Error(data.error || 'Failed to register store')
       }
 
-      setSuccess('Your sovereign store is now listed in the Chatze Hub Directory!')
+      setSuccess('Your self-deployed store is now published in the Chatze Hub Directory!')
       if (data.merchant) {
         onStoreRegistered(data.merchant)
-        setTimeout(() => onClose(), 1200)
+        setTimeout(() => onClose(), 1000)
       }
     } catch (err: any) {
       setError(err.message || 'Error registering store')
@@ -132,38 +157,82 @@ export function RegisterStoreModal({
       <div className="bg-[#111b21] border border-[#222e35] rounded-2xl w-full max-w-xl p-6 shadow-2xl relative my-8">
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 text-[#8696a0] hover:text-white p-1 rounded-lg"
+          className="absolute top-4 right-4 text-[#8696a0] hover:text-white p-1 rounded-lg transition-colors cursor-pointer"
         >
           <X className="w-5 h-5" />
         </button>
 
         <div className="flex items-center gap-3 mb-5">
-          <div className="w-10 h-10 rounded-xl bg-[#00a884]/10 border border-[#00a884]/30 flex items-center justify-center text-[#00a884]">
+          <div className="w-10 h-10 rounded-xl bg-[#00a884]/15 border border-[#00a884]/30 flex items-center justify-center text-[#00a884]">
             <Store className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-white font-bold text-base">Register Self-Deployed Store</h2>
+            <h2 className="text-white font-bold text-base">List Self-Deployed Store</h2>
             <p className="text-[#8696a0] text-xs">
-              List your independent Chatze Letterbox in the Nepal Discovery Directory
+              Connect your independent Chatze instance into the Nepal Sovereign Directory
             </p>
           </div>
         </div>
 
-        {error && (
-          <div className="mb-4 p-3 bg-red-950/40 border border-red-800/50 rounded-xl text-red-300 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span>{error}</span>
+        {!authToken ? (
+          <div className="py-8 text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#00a884]/15 border border-[#00a884]/30 text-[#00a884] flex items-center justify-center mx-auto">
+              <LogIn className="w-6 h-6" />
+            </div>
+            <h3 className="text-white font-bold text-base">Sign In Required</h3>
+            <p className="text-[#8696a0] text-xs max-w-sm mx-auto leading-relaxed">
+              Anyone with a self-deployed Chatze store can list it here, but you must sign in with Google first so your store is securely linked to your account.
+            </p>
+            {onOpenGoogleLogin && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose()
+                  onOpenGoogleLogin()
+                }}
+                className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold text-xs px-6 py-2.5 rounded-xl inline-flex items-center gap-2 cursor-pointer shadow-md transition-all"
+              >
+                <LogIn className="w-4 h-4" />
+                <span>Sign In with Google</span>
+              </button>
+            )}
           </div>
-        )}
-
-        {success && (
-          <div className="mb-4 p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
-            <span>{success}</span>
+        ) : (
+          <>
+            {/* Quick URL Auto-Detect Box */}
+            <div className="bg-[#182229] border border-[#2a3942] rounded-xl p-3 mb-4">
+          <label className="block text-xs font-semibold text-white mb-1 flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-[#00a884]" />
+            <span>Your Self-Deployed Store URL</span>
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              placeholder="https://your-store.pages.dev"
+              value={deployedUrl}
+              onChange={(e) => setDeployedUrl(e.target.value)}
+              className="flex-1 bg-[#111b21] border border-[#2a3942] focus:border-[#00a884] rounded-lg px-3 py-2 text-xs text-white placeholder-[#8696a0] focus:outline-none font-mono"
+            />
+            <button
+              type="button"
+              onClick={handleAutoDetect}
+              disabled={autoDetecting || !deployedUrl.trim()}
+              className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+            >
+              {autoDetecting ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="w-3.5 h-3.5" />
+              )}
+              <span>Auto-Detect</span>
+            </button>
           </div>
-        )}
+          <p className="text-[10px] text-[#8696a0] mt-1.5">
+            Enter your Cloudflare Pages or Workers URL. We automatically read the store name, handle, and embed endpoint.
+          </p>
+        </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-3.5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-[#aebac1] mb-1">
@@ -198,49 +267,18 @@ export function RegisterStoreModal({
           </div>
 
           <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-medium text-[#aebac1] flex items-center gap-1">
-                <LinkIcon className="w-3 h-3 text-[#00a884]" />
-                Self-Deployed Letterbox URL *
-              </label>
-              {embedUrl.trim() && (
-                <button
-                  type="button"
-                  onClick={() => probeNode(embedUrl)}
-                  disabled={probing}
-                  className="text-[10px] text-[#00a884] hover:underline flex items-center gap-1 font-semibold cursor-pointer disabled:opacity-50"
-                >
-                  <Sparkles className="w-3 h-3" />
-                  <span>{probing ? 'Probing...' : 'Verify Node Protocol'}</span>
-                </button>
-              )}
-            </div>
+            <label className="text-xs font-medium text-[#aebac1] flex items-center gap-1 mb-1">
+              <LinkIcon className="w-3 h-3 text-[#00a884]" />
+              Store Embed URL (Letterbox or Shop) *
+            </label>
             <input
               type="text"
-              placeholder="https://ram-crafts.pages.dev/letterbox or /shop?shop=ramcrafts"
+              placeholder="https://ram-crafts.pages.dev/letterbox"
               value={embedUrl}
-              onChange={(e) => {
-                setEmbedUrl(e.target.value)
-                setNodeVerified(null)
-              }}
+              onChange={(e) => setEmbedUrl(e.target.value)}
               required
               className="w-full bg-[#182229] border border-[#2a3942] focus:border-[#00a884] rounded-lg px-3 py-2 text-xs text-white placeholder-[#8696a0] focus:outline-none font-mono"
             />
-            {nodeVerified === true && (
-              <div className="mt-1.5 p-2 bg-[#00a884]/10 border border-[#00a884]/30 rounded-lg text-[11px] text-[#00a884] flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                <span>Tier 2 Cryptographic Handshake Verified ({nodeProtocol}) • Official Build Badge Granted</span>
-              </div>
-            )}
-            {nodeVerified === false && (
-              <div className="mt-1.5 p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[11px] text-amber-400 flex items-center gap-1.5">
-                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                <span>Custom Community Fork detected or node endpoint unreachable. Store will be registered with Community Fork warning.</span>
-              </div>
-            )}
-            <p className="text-[10px] text-[#8696a0] mt-1">
-              This is the URL embedded when users click "Inquire on Hub". Direct browser visits automatically redirect to Chatze Hub.
-            </p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -285,7 +323,7 @@ export function RegisterStoreModal({
             </label>
             <textarea
               rows={2}
-              placeholder="Tell customers about your products, quality, and location..."
+              placeholder="Describe your craft, goods, and location in Nepal..."
               value={bio}
               onChange={(e) => setBio(e.target.value)}
               className="w-full bg-[#182229] border border-[#2a3942] focus:border-[#00a884] rounded-lg px-3 py-2 text-xs text-white placeholder-[#8696a0] focus:outline-none resize-none"
@@ -295,7 +333,7 @@ export function RegisterStoreModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-[#aebac1] mb-1">
-                Physical Market Address (Optional)
+                Physical Address (Optional)
               </label>
               <input
                 type="text"
@@ -312,25 +350,12 @@ export function RegisterStoreModal({
               </label>
               <input
                 type="text"
-                placeholder="+977-9800000000"
+                placeholder="+977 98..."
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 className="w-full bg-[#182229] border border-[#2a3942] focus:border-[#00a884] rounded-lg px-3 py-2 text-xs text-white placeholder-[#8696a0] focus:outline-none"
               />
             </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-[#aebac1] mb-1">
-              Logo / Image URL (Optional)
-            </label>
-            <input
-              type="url"
-              placeholder="https://..."
-              value={logoUrl}
-              onChange={(e) => setLogoUrl(e.target.value)}
-              className="w-full bg-[#182229] border border-[#2a3942] focus:border-[#00a884] rounded-lg px-3 py-2 text-xs text-white placeholder-[#8696a0] focus:outline-none"
-            />
           </div>
 
           <div className="pt-2 flex items-center justify-end gap-3">
@@ -344,13 +369,15 @@ export function RegisterStoreModal({
             <button
               type="submit"
               disabled={loading}
-              className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-semibold text-xs px-5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer"
+              className="bg-[#00a884] hover:bg-[#02906f] text-[#111b21] font-bold text-xs px-5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
             >
               <PlusCircle className="w-4 h-4" />
-              <span>{loading ? 'Registering...' : 'List Store in Hub'}</span>
+              <span>{loading ? 'Publishing...' : 'Publish to Chatze Hub'}</span>
             </button>
           </div>
         </form>
+        </>
+        )}
       </div>
     </div>
   )
