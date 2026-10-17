@@ -496,7 +496,7 @@ inquiryRoutes.post('/api/inquiries/add-friend', async (c) => {
     const msgRecord: MemMessage = {
       id: messageId,
       conversation_id: conversationId,
-      sender_id: inquiry.sender_handle,
+      sender_id: inquiry.sender_user_id || inquiry.sender_handle,
       content: inquiry.content,
       created_at: now,
       read_at: now,

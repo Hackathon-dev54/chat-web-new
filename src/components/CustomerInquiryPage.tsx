@@ -438,8 +438,8 @@ export function CustomerInquiryPage({
     }
   }, [existingInquiry?.id, existingInquiry?.conversation_id, authedUser?.handle, soundEnabled])
 
-  // 4. Polling Fallback Sync (every 2.5 seconds) for guaranteed zero-delay delivery
-  useEffect(() => {
+  // 4. On-demand sync helper (Zero background invocations, pure event-driven SSE architecture)
+  const syncInquiryAndMessages = async () => {
     const customerHandle =
       authedUser?.handle ||
       existingInquiry?.sender_handle ||
@@ -450,69 +450,34 @@ export function CustomerInquiryPage({
     const storedInqId = existingInquiry?.id || localStorage.getItem(`chatze_inq_id_${shopHandle}`) || ''
     const convId = existingInquiry?.conversation_id || (customerHandle ? `conv_${customerHandle}` : '')
 
-    const checkAll = async () => {
-      // 1. Check conversation messages directly
-      if (convId) {
-        try {
-          const res = await fetch(`/api/messaging?conversationId=${encodeURIComponent(convId)}`)
-          if (res.ok) {
-            const data = await res.json()
-            if (Array.isArray(data.messages) && data.messages.length > 0) {
-              setMessages((prev) => {
-                if (data.messages.length !== prev.length) {
-                  return data.messages.map((m: any) => ({ ...m, status: 'sent' }))
-                }
-                return prev
-              })
-              setExistingInquiry((prev: any) => ({
-                ...(prev || {
-                  id: convId,
-                  sender_handle: customerHandle,
-                  category: 'Customer Chat',
-                  content: data.messages[0]?.body || 'Inquiry note',
-                  created_at: Date.now(),
-                }),
-                status: 'accepted',
-                conversation_id: convId,
-              }))
-              setSubmitted(true)
-            }
-          }
-        } catch {}
-      }
+    if (convId) {
+      await loadConversationMessages(convId)
+    }
 
-      // 2. Poll inquiry status
-      if (customerHandle || customerUserId || storedInqId) {
-        try {
-          const inqQueryParams = new URLSearchParams()
-          if (customerHandle) inqQueryParams.set('handle', customerHandle)
-          if (customerUserId) inqQueryParams.set('userId', customerUserId)
-          if (storedInqId) inqQueryParams.set('inquiryId', storedInqId)
+    if (customerHandle || customerUserId || storedInqId) {
+      try {
+        const inqQueryParams = new URLSearchParams()
+        if (customerHandle) inqQueryParams.set('handle', customerHandle)
+        if (customerUserId) inqQueryParams.set('userId', customerUserId)
+        if (storedInqId) inqQueryParams.set('inquiryId', storedInqId)
 
-          const res = await fetch(`/api/inquiries?${inqQueryParams.toString()}`)
-          if (res.ok) {
-            const data = await res.json()
-            if (data.inquiries && data.inquiries.length > 0) {
-              const matched = data.inquiries.find((i: any) => i.id === storedInqId) || data.inquiries[0]
-              if (matched) {
-                if (matched.status !== existingInquiry?.status || !existingInquiry) {
-                  setExistingInquiry(matched)
-                  if (matched.status === 'accepted') {
-                    const cId = matched.conversation_id || `conv_${matched.sender_handle}`
-                    loadConversationMessages(cId)
-                    if (soundEnabled) playGentleChime()
-                  }
-                }
+        const res = await fetch(`/api/inquiries?${inqQueryParams.toString()}`)
+        if (res.ok) {
+          const data = await res.json()
+          if (data.inquiries && data.inquiries.length > 0) {
+            const matched = data.inquiries.find((i: any) => i.id === storedInqId) || data.inquiries[0]
+            if (matched) {
+              setExistingInquiry(matched)
+              if (matched.status === 'accepted') {
+                const cId = matched.conversation_id || `conv_${matched.sender_handle}`
+                loadConversationMessages(cId)
               }
             }
           }
-        } catch {}
-      }
+        }
+      } catch {}
     }
-
-    const interval = setInterval(checkAll, 2400)
-    return () => clearInterval(interval)
-  }, [existingInquiry?.status, existingInquiry?.id, existingInquiry?.conversation_id, authedUser?.handle, shopHandle, soundEnabled])
+  }
 
   const handleCopyLink = () => {
     if (typeof window !== 'undefined') {
@@ -1132,12 +1097,7 @@ export function CustomerInquiryPage({
               {/* Instant Check / Open Live Chat Button */}
               <button
                 type="button"
-                onClick={() => {
-                  const convId = existingInquiry?.conversation_id || (customerHandle ? `conv_${customerHandle}` : '')
-                  if (convId) {
-                    loadConversationMessages(convId)
-                  }
-                }}
+                onClick={syncInquiryAndMessages}
                 className="w-full py-2.5 bg-[#182229] hover:bg-[#202c33] border border-[#00a884]/40 text-[#00a884] hover:text-[#25d366] font-semibold rounded-xl text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
               >
                 <MessageSquare className="w-4 h-4" />

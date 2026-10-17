@@ -1813,11 +1813,31 @@ export function MessagingApp({
                 className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3 min-h-0 bg-[#0b141a]"
               >
                 {messages.map((msg) => {
-                  const otherHandle = (activeConv.otherUser.username || '').replace(/^@/, '').trim().toLowerCase()
+                  const myId = (currentUser.id || '').trim().toLowerCase()
+                  const myHandle = (currentUser.handle || '').replace(/^@/, '').trim().toLowerCase()
+                  const otherHandle = (activeConv.otherUser?.username || (activeConv as any).remoteHandle || '').replace(/^@/, '').trim().toLowerCase()
+                  const otherId = (activeConv.otherUser?.id || (activeConv as any).user_b || '').trim().toLowerCase()
+                  const convTarget = (activeConv.id || '').replace(/^conv_/, '').trim().toLowerCase()
+
                   const senderClean = (msg.senderId || '').replace(/^@/, '').trim().toLowerCase()
-                  // In a 1-on-1 direct conversation, it is from the other user ONLY if the sender is their handle.
-                  // Otherwise, it was sent by ME (from PC, mobile, or any session) -> Right side (Green).
-                  const isFromOther = senderClean === otherHandle
+                  const senderHandleClean = ((msg as any).senderHandle || '').replace(/^@/, '').trim().toLowerCase()
+                  const recipientClean = ((msg as any).recipientHandle || '').replace(/^@/, '').trim().toLowerCase()
+
+                  // 1. Is this message from the customer / remote peer?
+                  const isFromOther = Boolean(
+                    (otherHandle && senderClean === otherHandle) ||
+                    (otherHandle && senderHandleClean === otherHandle) ||
+                    (otherId && senderClean === otherId) ||
+                    (otherHandle && senderClean.includes(otherHandle)) ||
+                    (convTarget && senderClean.includes(convTarget)) ||
+                    senderClean.startsWith('usr_hub_') ||
+                    senderClean === 'customer' ||
+                    (recipientClean && recipientClean === myHandle && senderClean !== myId && senderClean !== myHandle && senderClean !== 'usr_admin') ||
+                    (senderClean !== myId && senderClean !== myHandle && senderClean !== 'usr_admin' && (otherHandle || otherId))
+                  )
+
+                  // 2. Is this message from ME (the merchant)?
+                  // If it's explicitly from other, it is NOT me. Otherwise, it is me.
                   const isMe = !isFromOther
                   const parsed = parseMessageContent(msg.body)
 
